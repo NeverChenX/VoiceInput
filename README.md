@@ -16,18 +16,11 @@
 
 ### 2. 配置软件
 
-编辑 `config.json` 文件，填入上一步获取的信息：
+运行程序后，点击状态窗口的齿轮图标 ⚙️ 打开配置对话框，填入火山引擎获取的信息：
 
-```json
-{
-  "app_id": "你的AppID",
-  "access_token": "你的AccessToken",
-  "secret_key": "你的SecretKey",
-  "hotkey": "Alt+Space",
-  "hotkey_stop": "Space",
-  "auto_enter": true
-}
-```
+![软件配置界面](docs/config-ui.png)
+
+需要填写：App ID、Access Token、Secret Key，可自定义快捷键。
 
 ### 3. 运行程序
 
