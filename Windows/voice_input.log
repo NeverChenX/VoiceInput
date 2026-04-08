@@ -3614,3 +3614,59 @@
 [2026-04-08 09:03:18] [INFO ] on_paste: text_len=6 State → IDLE
 [2026-04-08 09:03:18] [INFO ] Clipboard set OK
 [2026-04-08 09:03:19] [INFO ] Ctrl+V + Enter sent (auto-enter ON)
+[2026-04-08 09:25:38] [INFO ] on_start_recording
+[2026-04-08 09:25:38] [INFO ] AudioRecorder: opening waveIn device (WAVE_MAPPER, 16kHz mono int16)
+[2026-04-08 09:25:38] [INFO ] AudioRecorder: waveInOpen OK, preparing 4 buffers
+[2026-04-08 09:25:38] [INFO ] AudioRecorder: recording started
+[2026-04-08 09:25:38] [INFO ] State → RECORDING
+[2026-04-08 09:25:43] [INFO ] on_stop_recording
+[2026-04-08 09:25:43] [INFO ] State → TRANSCRIBING
+[2026-04-08 09:25:43] [INFO ] AudioRecorder: stopping
+[2026-04-08 09:25:43] [INFO ] AudioRecorder: stopped, samples=81920 duration_ms=5120
+[2026-04-08 09:25:43] [INFO ] PCM OK: samples=81920 duration_ms=5120
+[2026-04-08 09:25:43] [INFO ] WAV built: bytes=163884
+[2026-04-08 09:25:43] [INFO ] ASR recognize: request_id=bd7a7b93-c30e-4443-8ffe-fc2f523c65d1 wav_bytes=163884
+[2026-04-08 09:25:43] [INFO ] ASR submit: request_id=bd7a7b93-c30e-4443-8ffe-fc2f523c65d1
+[2026-04-08 09:25:43] [INFO ] HTTP POST /api/v3/auc/bigmodel/submit body_bytes=218649 timeout_ms=120000
+[2026-04-08 09:25:44] [INFO ] HTTP response: api_status=20000000 api_msg=OK body_bytes=2
+[2026-04-08 09:25:44] [INFO ] ASR submit OK: request_id=bd7a7b93-c30e-4443-8ffe-fc2f523c65d1
+[2026-04-08 09:25:44] [INFO ] HTTP POST /api/v3/auc/bigmodel/query body_bytes=45 timeout_ms=120000
+[2026-04-08 09:25:44] [INFO ] HTTP response: api_status=20000001 api_msg=[Processing in progress] Handle response: Start Processing body_bytes=38
+[2026-04-08 09:25:44] [INFO ] ASR poll #1 code=20000001 status= text_len=0
+[2026-04-08 09:25:44] [INFO ] ASR still processing...
+[2026-04-08 09:25:45] [INFO ] HTTP POST /api/v3/auc/bigmodel/query body_bytes=45 timeout_ms=120000
+[2026-04-08 09:25:45] [INFO ] HTTP response: api_status=20000000 api_msg=OK body_bytes=1403
+[2026-04-08 09:25:45] [INFO ] ASR poll #2 code=20000000 status= text_len=55
+[2026-04-08 09:25:45] [INFO ] ASR success: text_len=55
+[2026-04-08 09:25:45] [INFO ] Transcription done, posting WM_APP_PASTE
+[2026-04-08 09:25:45] [INFO ] on_paste: text_len=21 State → IDLE
+[2026-04-08 09:25:45] [INFO ] Clipboard set OK
+[2026-04-08 09:25:45] [INFO ] Ctrl+V + Enter sent (auto-enter ON)
+[2026-04-08 09:25:56] [INFO ] on_start_recording
+[2026-04-08 09:25:56] [INFO ] AudioRecorder: opening waveIn device (WAVE_MAPPER, 16kHz mono int16)
+[2026-04-08 09:25:56] [INFO ] AudioRecorder: waveInOpen OK, preparing 4 buffers
+[2026-04-08 09:25:56] [INFO ] AudioRecorder: recording started
+[2026-04-08 09:25:56] [INFO ] State → RECORDING
+[2026-04-08 09:25:58] [INFO ] on_stop_recording
+[2026-04-08 09:25:58] [INFO ] State → TRANSCRIBING
+[2026-04-08 09:25:58] [INFO ] AudioRecorder: stopping
+[2026-04-08 09:25:58] [INFO ] AudioRecorder: stopped, samples=28672 duration_ms=1792
+[2026-04-08 09:25:58] [INFO ] PCM OK: samples=28672 duration_ms=1792
+[2026-04-08 09:25:58] [INFO ] WAV built: bytes=57388
+[2026-04-08 09:25:58] [INFO ] ASR recognize: request_id=61197f42-8b91-427f-876f-f611b669ed77 wav_bytes=57388
+[2026-04-08 09:25:58] [INFO ] ASR submit: request_id=61197f42-8b91-427f-876f-f611b669ed77
+[2026-04-08 09:25:58] [INFO ] HTTP POST /api/v3/auc/bigmodel/submit body_bytes=76657 timeout_ms=120000
+[2026-04-08 09:25:58] [INFO ] HTTP response: api_status=20000000 api_msg=OK body_bytes=2
+[2026-04-08 09:25:58] [INFO ] ASR submit OK: request_id=61197f42-8b91-427f-876f-f611b669ed77
+[2026-04-08 09:25:58] [INFO ] HTTP POST /api/v3/auc/bigmodel/query body_bytes=45 timeout_ms=120000
+[2026-04-08 09:25:58] [INFO ] HTTP response: api_status=20000001 api_msg=[Processing in progress] Handle response: Start Processing body_bytes=38
+[2026-04-08 09:25:58] [INFO ] ASR poll #1 code=20000001 status= text_len=0
+[2026-04-08 09:25:58] [INFO ] ASR still processing...
+[2026-04-08 09:25:59] [INFO ] HTTP POST /api/v3/auc/bigmodel/query body_bytes=45 timeout_ms=120000
+[2026-04-08 09:26:00] [INFO ] HTTP response: api_status=20000000 api_msg=OK body_bytes=576
+[2026-04-08 09:26:00] [INFO ] ASR poll #2 code=20000000 status= text_len=21
+[2026-04-08 09:26:00] [INFO ] ASR success: text_len=21
+[2026-04-08 09:26:00] [INFO ] Transcription done, posting WM_APP_PASTE
+[2026-04-08 09:26:00] [INFO ] on_paste: text_len=7 State → IDLE
+[2026-04-08 09:26:00] [INFO ] Clipboard set OK
+[2026-04-08 09:26:00] [INFO ] Ctrl+V + Enter sent (auto-enter ON)

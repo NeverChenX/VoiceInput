@@ -10,7 +10,13 @@ if ! command -v swift &>/dev/null; then
     exit 1
 fi
 
-swift build -c release 2>&1
+echo "Building VoiceInput..."
+swiftc \
+  -target arm64-apple-macosx12.0 \
+  -sdk /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk \
+  -framework AVFoundation -framework AppKit -framework Carbon \
+  Sources/VoiceInput/*.swift \
+  -o .build/release/VoiceInput 2>&1
 
 BINARY=".build/release/VoiceInput"
 if [ ! -f "$BINARY" ]; then
@@ -47,7 +53,7 @@ PLIST
 echo ""
 echo "✅ Build OK: $APP"
 echo ""
-echo "首次运行前请在"系统设置 → 隐私与安全 → 辅助功能"中授权 VoiceInput"
+echo "首次运行前请在 系统设置 → 隐私与安全 → 辅助功能 中授权 VoiceInput"
 echo ""
 echo "用法："
 echo "  double-click VoiceInput.app  — 启动"

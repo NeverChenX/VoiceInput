@@ -1,0 +1,14 @@
+{
+  "access_token" : "WoG6IZCkz0QCyoiBWKwOtuIMSnfmGk40",
+  "app_id" : "1380983374",
+  "auto_enter" : true,
+  "hotkey" : "Option+Space",
+  "hotkey_stop" : "Space",
+  "poll_interval_seconds" : 1.2,
+  "poll_timeout_seconds" : 45,
+  "request_timeout_seconds" : 120,
+  "secret_key" : "jhECtn1EMVy4-myE9rhWiqDORTKtrNxe",
+  "standard_query_endpoint" : "https:\/\/openspeech.bytedance.com\/api\/v3\/auc\/bigmodel\/query",
+  "standard_resource_id" : "volc.seedasr.auc",
+  "standard_submit_endpoint" : "https:\/\/openspeech.bytedance.com\/api\/v3\/auc\/bigmodel\/submit"
+}

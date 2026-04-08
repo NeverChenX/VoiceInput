@@ -5,6 +5,9 @@
   "standard_resource_id": "volc.seedasr.auc",
   "standard_submit_endpoint": "https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit",
   "standard_query_endpoint": "https://openspeech.bytedance.com/api/v3/auc/bigmodel/query",
+  "hotkey": "Option+Space",
+  "hotkey_stop": "Space",
+  "auto_enter": true,
   "request_timeout_seconds": 120,
   "poll_interval_seconds": 1.2,
   "poll_timeout_seconds": 45

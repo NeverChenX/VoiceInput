@@ -2,7 +2,7 @@ import AppKit
 
 @MainActor
 class AppController {
-    let config: Config
+    private(set) var config: Config
     var state: AppState = .idle { didSet { statusWC.update(state: state) } }
 
     private let recorder   = AudioRecorder()
@@ -10,6 +10,7 @@ class AppController {
     private let hotkey     = HotkeyManager()
     private let statusWC   = StatusWindowController()
     private var overlayWC: OverlayWindowController?
+    private var settingsWC: SettingsWindowController?
 
     init(config: Config) {
         self.config = config
@@ -17,26 +18,79 @@ class AppController {
     }
 
     func start() {
-        statusWC.onAutoEnterChanged = { _ in }  // state held in statusWC.autoEnter
+        // Configure hotkeys from config
+        hotkey.configure(startHotkey: config.hotkeyStart, stopHotkey: config.hotkeyStopValue)
+        
+        // Set up status window callbacks
+        statusWC.onAutoEnterChanged = { [weak self] isOn in
+            guard let self = self else { return }
+            // Update config in memory
+            self.config = self.config.with(autoEnter: isOn)
+            // Try to save to disk
+            try? self.config.save()
+        }
+        
+        statusWC.onOpenSettings = { [weak self] in
+            self?.openSettings()
+        }
+        
+        // Initialize status window with config values
+        statusWC.autoEnter = config.autoEnterValue
+        statusWC.update(hotkey: config.hotkeyStart)
 
+        // Set up hotkey callbacks
         hotkey.onStartRecording = { [weak self] in self?.startRecording() }
         hotkey.onStopRecording  = { [weak self] in self?.stopRecording() }
         hotkey.onCancel         = { [weak self] in self?.cancelRecording() }
         hotkey.start()
 
-        logInfo("AppController ready — Option+Space: 录音, Space: 停止, ESC: 取消")
+        logInfo("AppController ready — \(config.hotkeyStart): 录音, \(config.hotkeyStopValue): 停止, ESC: 取消")
+    }
+    
+    private func openSettings() {
+        guard settingsWC == nil else {
+            // Settings window already open, bring to front
+            settingsWC?.window?.makeKeyAndOrderFront(nil)
+            return
+        }
+        
+        settingsWC = SettingsWindowController(config: config)
+        
+        settingsWC?.onSave = { [weak self] newConfig in
+            guard let self = self else { return }
+            self.config = newConfig
+            
+            // Update hotkeys
+            self.hotkey.configure(startHotkey: newConfig.hotkeyStart, stopHotkey: newConfig.hotkeyStopValue)
+            self.hotkey.restart()
+            
+            // Update status window
+            self.statusWC.update(hotkey: newConfig.hotkeyStart)
+            self.statusWC.autoEnter = newConfig.autoEnterValue
+            
+            logInfo("Settings saved and applied")
+            self.settingsWC = nil
+        }
+        
+        settingsWC?.onCancel = { [weak self] in
+            self?.settingsWC = nil
+        }
+        
+        settingsWC?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     // ── Recording lifecycle ────────────────────────────────────────────────
     private func startRecording() {
         guard state == .idle else { return }
+        let stopKey = config.hotkeyStopValue
         do {
             try recorder.start()
         } catch {
             showError(error.localizedDescription); return
         }
         state = .recording
-        showOverlay("正在聆听", hint: "按空格停止")
+        showOverlay("正在聆听", hint: "按 \(stopKey) 停止")
         logInfo("State → RECORDING")
     }
 
