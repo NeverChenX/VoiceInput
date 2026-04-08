@@ -33,6 +33,9 @@ voice_input.exe
 **macOS:**
 ```bash
 cd Mac
+# 首次运行需要激活（清除 Gatekeeper 标记）
+bash activate.sh
+# 然后启动
 open VoiceInput.app
 ```
 
