@@ -1,0 +1,10 @@
+#!/bin/bash
+# Launcher — finds swift and runs the script. No compilation needed.
+RESOURCES="$(cd "$(dirname "$0")/../Resources" && pwd)"
+SWIFT=$(command -v swift 2>/dev/null)
+if [ -z "$SWIFT" ]; then
+    osascript -e 'display alert "VoiceInput" message "未找到 Swift。请先安装 Xcode 命令行工具：\n\nxcode-select --install" as critical'
+    exit 1
+fi
+cd "$RESOURCES"
+exec "$SWIFT" main.swift

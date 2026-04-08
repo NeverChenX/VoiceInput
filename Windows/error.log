@@ -1,0 +1,21 @@
+[2026-04-07 19:39:58] ASR submit error: code=45000030 msg=[resource_id=volc.seedasr.auc] requested resource not granted
+[2026-04-07 19:39:58] Transcription exception: ASR submit error: code=45000030 msg=[resource_id=volc.seedasr.auc] requested resource not granted
+[2026-04-07 19:39:58] on_error: ASR submit error: code=45000030 msg=[resource_id=volc.seedasr.auc] requested resource not granted
+[2026-04-07 19:55:09] ASR submit error: code=45000030 msg=[resource_id=volc.seedasr.auc] requested resource not granted
+[2026-04-07 19:55:09] Transcription exception: ASR submit error: code=45000030 msg=[resource_id=volc.seedasr.auc] requested resource not granted
+[2026-04-07 19:55:09] on_error: ASR submit error: code=45000030 msg=[resource_id=volc.seedasr.auc] requested resource not granted
+[2026-04-07 19:55:13] ASR submit error: code=45000030 msg=[resource_id=volc.seedasr.auc] requested resource not granted
+[2026-04-07 19:55:13] Transcription exception: ASR submit error: code=45000030 msg=[resource_id=volc.seedasr.auc] requested resource not granted
+[2026-04-07 19:55:13] on_error: ASR submit error: code=45000030 msg=[resource_id=volc.seedasr.auc] requested resource not granted
+[2026-04-07 19:55:19] ASR submit error: code=45000030 msg=[resource_id=volc.seedasr.auc] requested resource not granted
+[2026-04-07 19:55:19] Transcription exception: ASR submit error: code=45000030 msg=[resource_id=volc.seedasr.auc] requested resource not granted
+[2026-04-07 19:55:19] on_error: ASR submit error: code=45000030 msg=[resource_id=volc.seedasr.auc] requested resource not granted
+[2026-04-07 20:01:15] ASR submit error: code=45000030 msg=[resource_id=volc.seedasr.auc] requested resource not granted
+[2026-04-07 20:01:15] Transcription exception: ASR submit error: code=45000030 msg=[resource_id=volc.seedasr.auc] requested resource not granted
+[2026-04-07 20:01:15] on_error: ASR submit error: code=45000030 msg=[resource_id=volc.seedasr.auc] requested resource not granted
+[2026-04-07 20:05:52] ASR submit error: code=45000000 msg=resourceId Doubao_Seed_ASR_AUC_2.0 is not allowed
+[2026-04-07 20:05:52] Transcription exception: ASR submit error: code=45000000 msg=resourceId Doubao_Seed_ASR_AUC_2.0 is not allowed
+[2026-04-07 20:05:52] on_error: ASR submit error: code=45000000 msg=resourceId Doubao_Seed_ASR_AUC_2.0 is not allowed
+[2026-04-07 20:06:16] ASR submit error: code=45000000 msg=resourceId Doubao_Seed_ASR_AUC_2.0 is not allowed
+[2026-04-07 20:06:16] Transcription exception: ASR submit error: code=45000000 msg=resourceId Doubao_Seed_ASR_AUC_2.0 is not allowed
+[2026-04-07 20:06:16] on_error: ASR submit error: code=45000000 msg=resourceId Doubao_Seed_ASR_AUC_2.0 is not allowed
