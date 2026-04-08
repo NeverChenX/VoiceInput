@@ -187,6 +187,12 @@
 | app_id | string | （必填） | 火山引擎应用 ID |
 | access_token | string | （必填） | API 访问令牌 |
 | secret_key | string | "" | API 密钥 |
+
+### 🔑 在火山引擎获取以下信息配置到软件中
+
+访问 [火山引擎控制台](https://console.volcengine.com/speech/service/10039?AppID=6156196362) 获取 App ID、Access Token 和 Secret Key：
+
+![火山引擎配置](docs/volcengine-config.png)
 | standard_resource_id | string | "volc.seedasr.auc" | ASR 资源 ID |
 | standard_submit_endpoint | string | (见上) | 提交接口 URL |
 | standard_query_endpoint | string | (见上) | 查询接口 URL |
