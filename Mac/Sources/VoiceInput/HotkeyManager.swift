@@ -7,7 +7,7 @@ private let kEsc:   CGKeyCode = 53
 class HotkeyManager {
     var onStartRecording: (() -> Void)?
     var onStopRecording:  (() -> Void)?
-    var onExit:           (() -> Void)?
+    var onCancel:         (() -> Void)?
 
     private var tap: CFMachPort?
     private var src: CFRunLoopSource?
@@ -51,10 +51,14 @@ class HotkeyManager {
         let down = (type == .keyDown)
         let up   = (type == .keyUp)
 
-        // ESC → exit
+        // ESC → cancel recording
         if key == kEsc && down {
-            DispatchQueue.main.async { self.onExit?() }
-            return nil
+            if recording {
+                recording = false; consumed = false
+                DispatchQueue.main.async { self.onCancel?() }
+                return nil
+            }
+            return Unmanaged.passRetained(event)
         }
 
         guard key == kSpace else { return Unmanaged.passRetained(event) }

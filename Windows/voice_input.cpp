@@ -38,8 +38,6 @@
 #define IDC_BTN_CANCEL    2006
 #define IDC_EDIT_HOTKEY   2007
 #define IDC_EDIT_HKSTOP   2008
-#define IDC_CHK_LONGPRESS 2009
-
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -85,6 +83,7 @@ enum {
     WM_APP_ERROR  = WM_APP + 4,   // any   → main: lParam = new std::wstring*
     WM_APP_HIDE   = WM_APP + 5,   // timer → main: hide overlay
     WM_APP_TRAY   = WM_APP + 6,   // tray icon messages
+    WM_APP_CANCEL = WM_APP + 8,   // hook → main: cancel recording (discard audio)
 };
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -124,7 +123,6 @@ struct Config {
     std::string access_token;
     std::string secret_key;
     std::string resource_id    = "volc.seedasr.auc";
-    std::string trigger_mode   = "hotkey";   // "hotkey" | "longpress"
     std::string hotkey         = "Alt+Space";
     std::string hotkey_stop    = "Space";
     int request_timeout_ms     = 120000;
@@ -321,8 +319,6 @@ static Config load_config(const char* path) {
     c.secret_key    = jstr(raw, "secret_key");
     std::string rid = jstr(raw, "standard_resource_id");
     if (!rid.empty()) c.resource_id = rid;
-    std::string tm = jstr(raw, "trigger_mode");
-    if (!tm.empty()) c.trigger_mode = tm;
     std::string hks = jstr(raw, "hotkey");
     if (!hks.empty()) c.hotkey = hks;
     std::string hkstop = jstr(raw, "hotkey_stop");
@@ -349,7 +345,6 @@ static void save_config(const Config& c) {
       << "  \"access_token\": \""         << c.access_token  << "\",\n"
       << "  \"secret_key\": \""           << c.secret_key    << "\",\n"
       << "  \"standard_resource_id\": \"" << c.resource_id   << "\",\n"
-      << "  \"trigger_mode\": \""          << c.trigger_mode  << "\",\n"
       << "  \"hotkey\": \""               << c.hotkey        << "\",\n"
       << "  \"hotkey_stop\": \""          << c.hotkey_stop   << "\",\n"
       << "  \"standard_submit_endpoint\": \"https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit\",\n"
@@ -862,9 +857,7 @@ static LRESULT CALLBACK StatusProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         // Hotkey hint — left of gear
         std::wstring hk_w;
-        if (G.config.trigger_mode == "longpress") {
-            hk_w = L"长按空格";
-        } else {
+        {
             std::string s = hotkey_to_string(g_hotkey_start);
             hk_w = std::wstring(s.begin(), s.end());
         }
@@ -1088,22 +1081,6 @@ static LRESULT CALLBACK ConfigProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         // Section separator
         HWND sep = CreateWindowEx(0, L"STATIC",
-            L"─────────── 触发方式 ───────────",
-            WS_CHILD|WS_VISIBLE|SS_LEFT, x0, y, ew+lw+10, 24, hwnd, NULL, NULL, NULL);
-        SendMessage(sep, WM_SETFONT, (WPARAM)hf_bold, TRUE);
-        y += 32;
-
-        // Long-press toggle checkbox
-        HWND chk = CreateWindowEx(0, L"BUTTON",
-            L"长按空格 1.5 秒触发（不使用自定义快捷键）",
-            WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,
-            x0, y, ew+lw+4, 28, hwnd, (HMENU)IDC_CHK_LONGPRESS, NULL, NULL);
-        SendMessage(chk, WM_SETFONT, (WPARAM)hf, TRUE);
-        if (G.config.trigger_mode == "longpress")
-            SendMessage(chk, BM_SETCHECK, BST_CHECKED, 0);
-        y += 36;
-
-        sep = CreateWindowEx(0, L"STATIC",
             L"─────────── 快捷键设置  （点击输入框后按组合键）───────────",
             WS_CHILD|WS_VISIBLE|SS_LEFT, x0, y, ew+lw+10, 24, hwnd, NULL, NULL, NULL);
         SendMessage(sep, WM_SETFONT, (WPARAM)hf_bold, TRUE);
@@ -1141,23 +1118,10 @@ static LRESULT CALLBACK ConfigProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetDlgItemText(hwnd, IDC_EDIT_SECRET, ws(G.config.secret_key).c_str());
         SetDlgItemText(hwnd, IDC_EDIT_HOTKEY, ws(G.config.hotkey).c_str());
         SetDlgItemText(hwnd, IDC_EDIT_HKSTOP, ws(G.config.hotkey_stop).c_str());
-        // Disable hotkey fields if in longpress mode
-        if (G.config.trigger_mode == "longpress") {
-            EnableWindow(GetDlgItem(hwnd, IDC_EDIT_HOTKEY), FALSE);
-            EnableWindow(GetDlgItem(hwnd, IDC_EDIT_HKSTOP),  FALSE);
-        }
         return 0;
     }
 
     case WM_COMMAND:
-        if (LOWORD(wp) == IDC_CHK_LONGPRESS) {
-            // Toggle: disable/enable hotkey fields based on checkbox
-            bool longpress = (SendDlgItemMessage(hwnd, IDC_CHK_LONGPRESS,
-                                                  BM_GETCHECK, 0, 0) == BST_CHECKED);
-            EnableWindow(GetDlgItem(hwnd, IDC_EDIT_HOTKEY), !longpress);
-            EnableWindow(GetDlgItem(hwnd, IDC_EDIT_HKSTOP),  !longpress);
-            return 0;
-        }
         if (LOWORD(wp) == IDC_BTN_CANCEL) {
             G.config_wnd = NULL;
             DestroyWindow(hwnd);
@@ -1175,9 +1139,6 @@ static LRESULT CALLBACK ConfigProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             c.secret_key    = get(IDC_EDIT_SECRET);
             c.hotkey        = get(IDC_EDIT_HOTKEY);
             c.hotkey_stop   = get(IDC_EDIT_HKSTOP);
-            bool lp = (SendDlgItemMessage(hwnd, IDC_CHK_LONGPRESS,
-                                          BM_GETCHECK, 0, 0) == BST_CHECKED);
-            c.trigger_mode = lp ? "longpress" : "hotkey";
             if (c.app_id.empty() || c.access_token.empty()) {
                 MessageBoxW(hwnd, L"App ID 和 Access Token 不能为空。",
                             L"VoiceInput", MB_ICONWARNING|MB_OK);
@@ -1274,12 +1235,6 @@ static DWORD              g_hook_tid = 0;
 static std::atomic<bool>  g_recording{false};
 static std::atomic<bool>  g_hotkey_consumed{false};
 
-// Long-press mode state
-static const ULONGLONG    LONG_PRESS_MS  = 1500;
-static const ULONGLONG    LONG_PRESS_TOL = 200;
-static std::atomic<bool>  g_lp_space_dn{false};
-static std::atomic<bool>  g_lp_fired{false};
-static ULONGLONG          g_lp_press_ms = 0;
 
 static bool hotkey_matches(const HotkeyDef& h, DWORD vkCode) {
     if (vkCode != h.vk) return false;
@@ -1305,9 +1260,9 @@ static LRESULT CALLBACK HookProc(int code, WPARAM wParam, LPARAM lParam) {
     if (kb->vkCode == VK_ESCAPE && is_down) {
         if (g_recording.load()) {
             log_info("ESC — cancel recording");
-            g_recording = false; g_lp_space_dn = false; g_lp_fired = false;
+            g_recording = false;
             g_hotkey_consumed = false;
-            PostMessage(G.overlay, WM_APP_STOP, 0, 0);
+            PostMessage(G.overlay, WM_APP_CANCEL, 0, 0);
             return 1;
         }
         if (G.state == TRANSCRIBING || G.state == RECORDING) {
@@ -1318,67 +1273,6 @@ static LRESULT CALLBACK HookProc(int code, WPARAM wParam, LPARAM lParam) {
         }
         return 1;  // absorb ESC silently in idle
     }
-
-    bool longpress_mode = (G.config.trigger_mode == "longpress");
-
-    // ════════════════════════════════════════════════════════════════════
-    // Long-press Space (1.5 s) mode
-    // ════════════════════════════════════════════════════════════════════
-    if (longpress_mode) {
-        // Only handle Space
-        if (kb->vkCode != VK_SPACE)
-            return CallNextHookEx(g_hook, code, wParam, lParam);
-
-        // While recording: Space → stop
-        if (g_recording.load()) {
-            if (is_down) {
-                g_recording = false; g_lp_space_dn = false; g_lp_fired = false;
-                PostMessage(G.overlay, WM_APP_STOP, 0, 0);
-                return 1;
-            }
-            return 1;
-        }
-
-        if (is_down && !g_lp_space_dn.exchange(true)) {
-            // Fresh press — start timer thread
-            g_lp_fired = false;
-            g_lp_press_ms = GetTickCount64();
-            ULONGLONG t0 = g_lp_press_ms;
-            HWND wnd = G.overlay;
-            std::thread([wnd, t0](){
-                Sleep((DWORD)LONG_PRESS_MS);
-                if (g_lp_space_dn.load() && g_lp_press_ms == t0
-                        && !g_lp_fired.exchange(true)) {
-                    PostMessage(wnd, WM_APP_START, 0, 0);
-                }
-            }).detach();
-            return 1;
-        }
-        if (is_down) return 1;  // key-repeat suppressed
-
-        if (is_up) {
-            bool was_dn = g_lp_space_dn.exchange(false);
-            ULONGLONG held = GetTickCount64() - g_lp_press_ms;
-            if (g_lp_fired.exchange(false)) return 1;  // timer already fired
-            if (was_dn && held >= LONG_PRESS_MS - LONG_PRESS_TOL) {
-                // Released right at threshold — trigger now
-                g_lp_fired = true;
-                PostMessage(G.overlay, WM_APP_START, 0, 0);
-                return 1;
-            }
-            if (was_dn) {
-                // Short press — inject space back
-                keybd_event(VK_SPACE, 0, 0, 0);
-                keybd_event(VK_SPACE, 0, KEYEVENTF_KEYUP, 0);
-            }
-            return 1;
-        }
-        return CallNextHookEx(g_hook, code, wParam, lParam);
-    }
-
-    // ════════════════════════════════════════════════════════════════════
-    // Custom hotkey mode
-    // ════════════════════════════════════════════════════════════════════
 
     // While recording: stop hotkey → stop
     if (g_recording.load()) {
@@ -1561,6 +1455,19 @@ static void on_paste(std::wstring* raw) {
     }
 }
 
+static void on_cancel_recording() {
+    log_info("on_cancel_recording");
+    g_recording = false;
+    if (G.state == RECORDING) {
+        G.recorder.stop();   // discard audio
+    }
+    G.state = IDLE;
+    status_refresh();
+    overlay_show(L"已取消", L"");
+    HWND wnd = G.overlay;
+    std::thread([wnd]{ Sleep(800); PostMessage(wnd, WM_APP_HIDE, 0, 0); }).detach();
+}
+
 static void on_error(std::wstring* raw) {
     std::unique_ptr<std::wstring> msg(raw);
     g_recording = false;
@@ -1623,6 +1530,7 @@ static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     // App messages dispatched here on the main thread
     case WM_APP_START:  on_start_recording();        return 0;
     case WM_APP_STOP:   on_stop_recording();         return 0;
+    case WM_APP_CANCEL: on_cancel_recording();       return 0;
     case WM_APP_PASTE:  on_paste((std::wstring*)lp); return 0;
     case WM_APP_ERROR:  on_error((std::wstring*)lp); return 0;
     case WM_APP_HIDE:   overlay_hide();              return 0;

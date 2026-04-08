@@ -19,3 +19,5 @@
 [2026-04-07 20:06:16] ASR submit error: code=45000000 msg=resourceId Doubao_Seed_ASR_AUC_2.0 is not allowed
 [2026-04-07 20:06:16] Transcription exception: ASR submit error: code=45000000 msg=resourceId Doubao_Seed_ASR_AUC_2.0 is not allowed
 [2026-04-07 20:06:16] on_error: ASR submit error: code=45000000 msg=resourceId Doubao_Seed_ASR_AUC_2.0 is not allowed
+[2026-04-08 08:20:07] Transcription exception: No valid speech detected.
+[2026-04-08 08:20:07] on_error: No valid speech detected.

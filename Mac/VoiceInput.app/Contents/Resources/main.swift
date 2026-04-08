@@ -3,6 +3,7 @@
 // Run via launcher script, no compilation needed.
 import AppKit
 import AVFoundation
+import CoreGraphics
 import Foundation
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
@@ -34,7 +35,6 @@ struct AppConfig: Codable {
     var standard_resource_id:       String? = nil
     var standard_submit_endpoint:   String? = nil
     var standard_query_endpoint:    String? = nil
-    var trigger_mode:               String? = nil   // "hotkey" | "longpress"
     var hotkey:                     String? = nil   // e.g. "Alt+Space"
     var hotkey_stop:                String? = nil
     var request_timeout_seconds:    Int?    = nil
@@ -48,7 +48,6 @@ struct AppConfig: Codable {
     var requestTimeout: Double  { Double(request_timeout_seconds ?? 120) }
     var pollInterval:   Double  { poll_interval_seconds ?? 1.2 }
     var pollTimeout:    Double  { poll_timeout_seconds  ?? 45.0 }
-    var triggerMode:    String  { trigger_mode ?? "hotkey" }
     var startHotkey:    String  { hotkey      ?? "Alt+Space" }
     var stopHotkey:     String  { hotkey_stop ?? "Space" }
     var autoEnterOn:    Bool    { auto_enter  ?? true }
@@ -275,14 +274,8 @@ class HotkeyMgr {
     private var src: CFRunLoopSource?
     private(set) var recording = false
 
-    var mode: String = "hotkey"
     var startHK = HotkeyDef()
     var stopHK  = HotkeyDef()
-
-    // Long-press state
-    private var spaceDown: Date?
-    private var lpFired = false
-    private let kLongPress: TimeInterval = 1.5
 
     func start() {
         let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
@@ -313,7 +306,7 @@ class HotkeyMgr {
         src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, t, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), src, .commonModes)
         CGEvent.tapEnable(tap: t, enable: true)
-        logInfo("HotkeyMgr: tap installed mode=\(mode)")
+        logInfo("HotkeyMgr: tap installed")
     }
 
     func setRecording(_ r: Bool) { recording = r }
@@ -327,53 +320,12 @@ class HotkeyMgr {
         // ESC cancels recording/transcribing state
         if kc == kVK_Escape && down {
             if recording {
-                recording = false; spaceDown = nil; lpFired = false
+                recording = false
                 DispatchQueue.main.async { self.onEsc?() }
                 return nil
             }
             return Unmanaged.passRetained(event)
         }
-
-        // ── Long-press mode ───────────────────────────────────────────────
-        if mode == "longpress" {
-            guard kc == kVK_Space else { return Unmanaged.passRetained(event) }
-            if recording {
-                if down {
-                    recording = false; spaceDown = nil; lpFired = false
-                    DispatchQueue.main.async { self.onStop?() }
-                }
-                return nil
-            }
-            if down {
-                guard spaceDown == nil else { return nil }
-                spaceDown = Date(); lpFired = false
-                let t0 = spaceDown!
-                DispatchQueue.global().asyncAfter(deadline: .now() + kLongPress) { [weak self] in
-                    guard let self, self.spaceDown != nil,
-                          abs(self.spaceDown!.timeIntervalSince(t0)) < 0.01,
-                          !self.lpFired else { return }
-                    self.lpFired = true
-                    DispatchQueue.main.async { self.onStart?() }
-                }
-                return nil
-            }
-            if up {
-                let held = spaceDown.map { Date().timeIntervalSince($0) } ?? 0
-                spaceDown = nil
-                if lpFired { lpFired = false; return nil }
-                if held >= kLongPress - 0.2 {
-                    lpFired = true
-                    DispatchQueue.main.async { self.onStart?() }
-                    return nil
-                }
-                // Short press — re-inject space
-                injectKey(kVK_Space, flags: [])
-                return nil
-            }
-            return Unmanaged.passRetained(event)
-        }
-
-        // ── Hotkey mode ───────────────────────────────────────────────────
         if recording {
             if down && (matches(event, stopHK) || matches(event, startHK)) {
                 recording = false
@@ -405,13 +357,6 @@ class HotkeyMgr {
             && f.contains(.maskCommand)   == h.cmd
     }
 
-    private func injectKey(_ vk: CGKeyCode, flags: CGEventFlags) {
-        let src = CGEventSource(stateID: .hidSystemState)
-        let dn = CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: true)!
-        let up = CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: false)!
-        dn.flags = flags; up.flags = flags
-        dn.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
-    }
 }
 
 // ─── Status view (200×200) ────────────────────────────────────────────────────
@@ -420,7 +365,7 @@ enum VIState { case idle, recording, transcribing }
 class StatusView: NSView {
     var viState: VIState = .idle { didSet { needsDisplay = true } }
     var autoEnter = true  { didSet { needsDisplay = true } }
-    var hint = "Alt+Space"{ didSet { needsDisplay = true } }
+    var hint: String = "Alt+Space" { didSet { needsDisplay = true } }
 
     var onToggle: (() -> Void)?
     var onGear:   (() -> Void)?
@@ -593,7 +538,6 @@ class ConfigWC: NSWindowController, NSWindowDelegate {
     private var fAppId  = NSTextField()
     private var fToken  = NSTextField()
     private var fSecret = NSTextField()
-    private var cLongpress: NSButton!
     private var fHotkey = NSTextField()
     private var fStop   = NSTextField()
     private var cAutoEnter: NSButton!
@@ -626,7 +570,6 @@ class ConfigWC: NSWindowController, NSWindowDelegate {
         fAppId  = field(cfg.app_id)
         fToken  = field(cfg.access_token)
         fSecret = field(cfg.secret_key)
-        cLongpress = chk("长按空格 1.5 秒触发（与快捷键二选一）", on: cfg.triggerMode == "longpress")
         fHotkey = field(cfg.startHotkey)
         fStop   = field(cfg.stopHotkey)
         cAutoEnter = chk("识别后自动按 Return 发送", on: cfg.autoEnterOn)
@@ -657,7 +600,7 @@ class ConfigWC: NSWindowController, NSWindowDelegate {
         row("App ID:", fAppId)
         row("Access Token:", fToken)
         row("Secret Key:", fSecret)
-        y += 8; addChk(cLongpress); y += 4
+        y += 8
         row("开始快捷键:", fHotkey)
         row("停止快捷键:", fStop)
         y += 4; addChk(cAutoEnter); y += 12
@@ -677,20 +620,13 @@ class ConfigWC: NSWindowController, NSWindowDelegate {
             bCancel.bottomAnchor.constraint(equalTo: bSave.bottomAnchor),
             bCancel.widthAnchor.constraint(equalToConstant: 80),
         ])
-        cLongpress.target = self; cLongpress.action = #selector(toggleLP)
-        toggleLP()
     }
 
-    @objc private func toggleLP() {
-        let lp = cLongpress.state == .on
-        fHotkey.isEnabled = !lp; fStop.isEnabled = !lp
-    }
     @objc private func doSave() {
         var c = cfg
         c.app_id        = fAppId.stringValue
         c.access_token  = fToken.stringValue
         c.secret_key    = fSecret.stringValue
-        c.trigger_mode  = cLongpress.state == .on ? "longpress" : "hotkey"
         c.hotkey        = fHotkey.stringValue
         c.hotkey_stop   = fStop.stringValue
         c.auto_enter    = cAutoEnter.state == .on
@@ -725,16 +661,14 @@ class AppCtrl {
         hkMgr.onStop  = { [weak self] in self?.stopRec() }
         hkMgr.onEsc   = { [weak self] in self?.cancelState() }
         hkMgr.start()
-        logInfo("AppCtrl ready mode=\(cfg.triggerMode) hotkey=\(cfg.startHotkey)")
+        logInfo("AppCtrl ready hotkey=\(cfg.startHotkey)")
     }
 
     private func applyConfig() {
-        hkMgr.mode    = cfg.triggerMode
         hkMgr.startHK = parseHotkey(cfg.startHotkey)
         hkMgr.stopHK  = parseHotkey(cfg.stopHotkey)
-        let hint = cfg.triggerMode == "longpress" ? "长按空格"
-                                                  : hotkeyString(hkMgr.startHK)
-        statusWC.sv.hint = hint; statusWC.sv.needsDisplay = true
+        statusWC.sv.hint = hotkeyString(hkMgr.startHK)
+        statusWC.sv.needsDisplay = true
     }
 
     private func startRec() {
@@ -766,11 +700,12 @@ class AppCtrl {
 
     private func cancelState() {
         hkMgr.setRecording(false); _ = recorder.stop()
-        state = .idle; hideOv()
+        state = .idle
+        showOv("已取消", hint: "")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.hideOv() }
         logInfo("State cancelled by ESC")
     }
 
-    @MainActor
     private func paste(_ text: String) {
         state = .idle; hideOv()
         NSPasteboard.general.clearContents()

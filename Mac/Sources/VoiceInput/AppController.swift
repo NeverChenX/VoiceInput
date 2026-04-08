@@ -21,10 +21,10 @@ class AppController {
 
         hotkey.onStartRecording = { [weak self] in self?.startRecording() }
         hotkey.onStopRecording  = { [weak self] in self?.stopRecording() }
-        hotkey.onExit           = { NSApp.terminate(nil) }
+        hotkey.onCancel         = { [weak self] in self?.cancelRecording() }
         hotkey.start()
 
-        logInfo("AppController ready — Option+Space: 录音, Space: 停止, ESC: 退出")
+        logInfo("AppController ready — Option+Space: 录音, Space: 停止, ESC: 取消")
     }
 
     // ── Recording lifecycle ────────────────────────────────────────────────
@@ -70,6 +70,14 @@ class AppController {
                 await MainActor.run { self.showError(error.localizedDescription) }
             }
         }
+    }
+
+    private func cancelRecording() {
+        _ = recorder.stop()
+        state = .idle
+        showOverlay("已取消", hint: "")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.hideOverlay() }
+        logInfo("State cancelled by ESC")
     }
 
     // ── Paste ──────────────────────────────────────────────────────────────
