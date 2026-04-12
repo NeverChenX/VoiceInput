@@ -49,6 +49,7 @@
 #include <thread>
 #include <vector>
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 #include <ctime>
 
@@ -70,10 +71,10 @@ static const wchar_t*  API_HOST        = L"openspeech.bytedance.com";
 static const wchar_t*  SUBMIT_PATH     = L"/api/v3/auc/bigmodel/submit";
 static const wchar_t*  QUERY_PATH      = L"/api/v3/auc/bigmodel/query";
 static const wchar_t*  OVERLAY_CLASS   = L"VoiceInputOverlay";
-static const wchar_t*  STATUS_CLASS    = L"VoiceInputStatus";
 static const wchar_t*  CONFIG_CLASS    = L"VoiceInputConfig";
-static const int       STATUS_W        = 200;
-static const int       STATUS_H        = 200;
+static const wchar_t*  WAVE_CLASS      = L"VoiceInputWave";
+static const int       WAVE_W          = 540;
+static const int       WAVE_H          = 32;
 
 // Custom window messages
 enum {
@@ -698,8 +699,8 @@ struct AppGlobals {
     // Overlay text (written from main thread only, so no mutex needed here)
     std::wstring main_text, sub_text;
 
-    // Status mini-window + config dialog
-    HWND status_wnd = NULL;
+    // Wave indicator + config dialog
+    HWND wave_wnd  = NULL;
     HWND config_wnd = NULL;
 
     // Tray icon
@@ -707,223 +708,225 @@ struct AppGlobals {
     bool tray_added    = false;
 } G;
 
-// ════════════════════════════════════════════════════════════════════════════
-// Status mini-window (68×82, always on top, draggable, top-right corner)
-// ════════════════════════════════════════════════════════════════════════════
-static HFONT  g_font_status     = NULL;
-static HFONT  g_font_status_sub = NULL;
 static bool   g_auto_enter      = true;
 
-// Drag state
-static bool  g_st_dragging  = false;
-static POINT g_st_drag_orig = {};
-static POINT g_st_wnd_orig  = {};
+// ════════════════════════════════════════════════════════════════════════════
+// Wave indicator window (small floating bar above taskbar during recording)
+// ════════════════════════════════════════════════════════════════════════════
+static HFONT    g_font_wave       = NULL;
+static HFONT    g_font_wave_sm    = NULL;
+static int      g_wave_tick       = 0;
+static UINT_PTR g_wave_timer_id   = 0;
 
-// Gear button hit rect (in client coords, computed in WM_PAINT)
-static RECT  g_gear_rect    = {};
+// Per-bar random phase offsets for organic movement
+static double   g_bar_phase[48]   = {};
+static bool     g_bar_phase_init  = false;
 
-static void status_style(AppState s, COLORREF& dot, const wchar_t*& label) {
-    switch (s) {
-    case RECORDING:    dot = RGB(255, 70,  70);  label = L"录音"; break;
-    case TRANSCRIBING: dot = RGB(70,  140, 255); label = L"识别"; break;
-    default:           dot = RGB(120, 120, 120); label = L"待机"; break;
-    }
+static void wave_init_phases() {
+    if (g_bar_phase_init) return;
+    srand((unsigned)GetTickCount());
+    for (int i = 0; i < 48; i++)
+        g_bar_phase[i] = (rand() % 1000) / 1000.0 * 6.28318;
+    g_bar_phase_init = true;
 }
 
-static void status_set_round_rgn(HWND hwnd) {
-    HRGN rgn = CreateRoundRectRgn(0, 0, STATUS_W + 1, STATUS_H + 1, 14, 14);
+static void wave_set_round_rgn(HWND hwnd) {
+    HRGN rgn = CreateRoundRectRgn(0, 0, WAVE_W + 1, WAVE_H + 1, 24, 24);
     SetWindowRgn(hwnd, rgn, TRUE);
 }
 
-static LRESULT CALLBACK StatusProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+// Interpolate two COLORREFs by t (0..1)
+static COLORREF lerp_color(COLORREF a, COLORREF b, double t) {
+    if (t < 0) t = 0; if (t > 1) t = 1;
+    int r = GetRValue(a) + (int)((GetRValue(b) - GetRValue(a)) * t);
+    int g = GetGValue(a) + (int)((GetGValue(b) - GetGValue(a)) * t);
+    int bl= GetBValue(a) + (int)((GetBValue(b) - GetBValue(a)) * t);
+    return RGB(r, g, bl);
+}
+
+static LRESULT CALLBACK WaveProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE:
-        // Use ANTIALIASED_QUALITY for crisp rendering on any DPI
-        g_font_status = CreateFont(-26, 0,0,0, FW_BOLD, 0,0,0,
+        g_font_wave = CreateFont(-20, 0,0,0, FW_SEMIBOLD, 0,0,0,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             ANTIALIASED_QUALITY, DEFAULT_PITCH|FF_SWISS, L"Segoe UI");
-        g_font_status_sub = CreateFont(-15, 0,0,0, FW_NORMAL, 0,0,0,
+        g_font_wave_sm = CreateFont(-13, 0,0,0, FW_NORMAL, 0,0,0,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             ANTIALIASED_QUALITY, DEFAULT_PITCH|FF_SWISS, L"Segoe UI");
-        status_set_round_rgn(hwnd);
+        wave_set_round_rgn(hwnd);
+        wave_init_phases();
         return 0;
 
     case WM_ERASEBKGND: return 1;
 
+    case WM_TIMER:
+        g_wave_tick++;
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(hwnd, &ps);
-
-        // Use memory DC to avoid flicker / sub-pixel artifacts
         RECT rc; GetClientRect(hwnd, &rc);
+        const int W = rc.right, H = rc.bottom;
         HDC mdc = CreateCompatibleDC(dc);
-        HBITMAP bmp = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
+        HBITMAP bmp = CreateCompatibleBitmap(dc, W, H);
         HBITMAP old_bmp = (HBITMAP)SelectObject(mdc, bmp);
 
-        // ── Layout constants ──────────────────────────────────────────────
-        // Window is STATUS_W × STATUS_H (200 × 200)
-        // Zone A: state indicator  — top 56%  (0..112)
-        // Divider 1                — y=112
-        // Zone B: auto-enter       — 113..157 (44px)
-        // Divider 2                — y=157
-        // Zone C: hotkey + gear    — 158..200 (42px)
-
-        const int W  = rc.right;          // 200
-        const int cx = W / 2;
-        const int DIV1 = 112, DIV2 = 157;
-
-        // ── Background ───────────────────────────────────────────────────
-        HBRUSH bg_br = CreateSolidBrush(RGB(18, 18, 24));
-        FillRect(mdc, &rc, bg_br);
-        DeleteObject(bg_br);
-
+        // Deep dark background
+        HBRUSH bg = CreateSolidBrush(RGB(8, 8, 16));
+        FillRect(mdc, &rc, bg);
+        DeleteObject(bg);
         SetBkMode(mdc, TRANSPARENT);
 
-        // ── Zone A: colored dot + state label ────────────────────────────
-        COLORREF dot_col; const wchar_t* label;
-        status_style(G.state, dot_col, label);
+        bool is_rec = (G.state == RECORDING);
+        double t = g_wave_tick * 0.033;
 
-        const int dot_r = 20, dot_cy = 46;
-        HBRUSH dot_br = CreateSolidBrush(dot_col);
-        HPEN   dot_pn = CreatePen(PS_SOLID, 0, dot_col);
-        SelectObject(mdc, dot_br); SelectObject(mdc, dot_pn);
-        Ellipse(mdc, cx-dot_r, dot_cy-dot_r, cx+dot_r, dot_cy+dot_r);
-        DeleteObject(dot_br); DeleteObject(dot_pn);
+        // Global pulse - whole bar breathes/flashes
+        double pulse = is_rec
+            ? 0.7 + 0.3 * sin(t * 4.0)
+            : 0.5 + 0.5 * sin(t * 1.5);
 
-        SelectObject(mdc, g_font_status);
-        SetTextColor(mdc, RGB(230, 230, 235));
-        RECT rA = { 0, dot_cy+dot_r+8, W, DIV1-2 };
-        DrawText(mdc, label, -1, &rA, DT_CENTER|DT_VCENTER|DT_SINGLELINE);
-
-        // ── Divider 1 ─────────────────────────────────────────────────────
-        auto draw_div = [&](int y) {
-            HPEN p = CreatePen(PS_SOLID, 1, RGB(44, 44, 56));
-            SelectObject(mdc, p);
-            MoveToEx(mdc, 14, y, NULL); LineTo(mdc, W-14, y);
-            DeleteObject(p);
-        };
-        draw_div(DIV1);
-
-        // ── Zone B: auto-enter toggle switch ─────────────────────────────
-        // Label on the left, iOS-style toggle on the right
-        const int zB_cy  = (DIV1 + DIV2) / 2;   // vertical center of zone B = 134
-
-        // Label
-        SelectObject(mdc, g_font_status_sub);
-        SetTextColor(mdc, RGB(210, 210, 218));
-        RECT rB_lbl = { 14, DIV1+1, W/2 + 10, DIV2 };
-        DrawText(mdc, L"自动发送", -1, &rB_lbl, DT_LEFT|DT_VCENTER|DT_SINGLELINE);
-
-        // Toggle track (64 × 28, right-aligned, vertically centered)
-        const int TW = 58, TH = 28;
-        const int tx = W - TW - 14;           // track left x
-        const int ty = zB_cy - TH / 2;        // track top y
-        COLORREF track_col = g_auto_enter ? RGB(48, 192, 100) : RGB(52, 52, 66);
-        HBRUSH trk_br = CreateSolidBrush(track_col);
-        HPEN   trk_pn = CreatePen(PS_SOLID, 0, track_col);
-        SelectObject(mdc, trk_br); SelectObject(mdc, trk_pn);
-        RoundRect(mdc, tx, ty, tx+TW, ty+TH, TH, TH);   // fully rounded ends
-        DeleteObject(trk_br); DeleteObject(trk_pn);
-
-        // Toggle thumb (circle, slides inside the track)
-        const int thumb_r = TH/2 - 3;         // radius = 11
-        const int thumb_cx = g_auto_enter
-            ? (tx + TW - thumb_r - 4)          // right side (ON)
-            : (tx + thumb_r + 4);              // left  side (OFF)
-        const int thumb_cy = zB_cy;
-        HBRUSH th_br = CreateSolidBrush(RGB(255, 255, 255));
-        HPEN   th_pn = CreatePen(PS_SOLID, 0, RGB(255, 255, 255));
-        SelectObject(mdc, th_br); SelectObject(mdc, th_pn);
-        Ellipse(mdc, thumb_cx-thumb_r, thumb_cy-thumb_r,
-                     thumb_cx+thumb_r, thumb_cy+thumb_r);
-        DeleteObject(th_br); DeleteObject(th_pn);
-
-        // ── Divider 2 ─────────────────────────────────────────────────────
-        draw_div(DIV2);
-
-        // ── Zone C: hotkey hint (left) + gear button (right) ─────────────
-        SelectObject(mdc, g_font_status_sub);
-
-        // Gear button — right side
-        g_gear_rect = { W-40, DIV2+8, W-8, rc.bottom-8 };
-        HBRUSH gear_bg = CreateSolidBrush(RGB(36, 38, 50));
-        HPEN   gear_pn = CreatePen(PS_SOLID, 1, RGB(62, 64, 80));
-        SelectObject(mdc, gear_bg); SelectObject(mdc, gear_pn);
-        RoundRect(mdc, g_gear_rect.left, g_gear_rect.top,
-                       g_gear_rect.right, g_gear_rect.bottom, 6, 6);
-        DeleteObject(gear_bg); DeleteObject(gear_pn);
-        SetTextColor(mdc, RGB(170, 172, 196));
-        DrawText(mdc, L"⚙", -1, &g_gear_rect, DT_CENTER|DT_VCENTER|DT_SINGLELINE);
-
-        // Hotkey hint — left of gear
-        std::wstring hk_w;
+        // Bottom glow line
         {
-            std::string s = hotkey_to_string(g_hotkey_start);
-            hk_w = std::wstring(s.begin(), s.end());
+            COLORREF glow_col = is_rec
+                ? lerp_color(RGB(255, 30, 60), RGB(255, 120, 50), 0.5 + 0.5 * sin(t * 3.0))
+                : lerp_color(RGB(40, 100, 255), RGB(120, 60, 255), 0.5 + 0.5 * sin(t * 1.2));
+            glow_col = lerp_color(RGB(8,8,16), glow_col, pulse);
+            for (int dy = 0; dy < 3; dy++) {
+                HPEN p = CreatePen(PS_SOLID, 1, lerp_color(glow_col, RGB(8,8,16), dy * 0.35));
+                SelectObject(mdc, p);
+                MoveToEx(mdc, 20, H - 4 + dy, NULL);
+                LineTo(mdc, W - 20, H - 4 + dy);
+                DeleteObject(p);
+            }
         }
-        RECT rC = { 10, DIV2+1, g_gear_rect.left-6, rc.bottom };
-        SetTextColor(mdc, RGB(88, 90, 108));
-        DrawText(mdc, hk_w.c_str(), -1, &rC, DT_CENTER|DT_VCENTER|DT_SINGLELINE);
 
-        // Blit memory DC → real DC
-        BitBlt(dc, 0, 0, rc.right, rc.bottom, mdc, 0, 0, SRCCOPY);
+        // Spectrum bars: 32 bars, centered
+        const int bar_count = 32;
+        const int bar_w     = 5;
+        const int bar_gap   = 3;
+        const int total_bw  = bar_count * (bar_w + bar_gap) - bar_gap;
+        const int bars_x0   = (W - total_bw) / 2;
+        const int cy        = H / 2 - 1;
+        const int max_h     = H / 2 - 8;
+
+        COLORREF c_left  = is_rec ? RGB(0, 230, 180) : RGB(60, 120, 255);
+        COLORREF c_mid   = is_rec ? RGB(60, 140, 255) : RGB(100, 80, 255);
+        COLORREF c_right = is_rec ? RGB(180, 60, 255) : RGB(160, 50, 255);
+
+        for (int i = 0; i < bar_count; i++) {
+            double frac = (double)i / (bar_count - 1);
+            COLORREF bar_col = (frac < 0.5)
+                ? lerp_color(c_left, c_mid, frac * 2.0)
+                : lerp_color(c_mid, c_right, (frac - 0.5) * 2.0);
+
+            double h_norm;
+            if (is_rec) {
+                double s1 = sin(t * 5.0  + g_bar_phase[i]);
+                double s2 = sin(t * 8.0  + i * 0.4);
+                double s3 = sin(t * 12.0 + i * 0.7 + g_bar_phase[i] * 0.5);
+                h_norm = 0.3 + 0.35*(0.5+0.5*s1) + 0.20*(0.5+0.5*s2) + 0.15*(0.5+0.5*s3);
+            } else {
+                double s1 = sin(t * 1.8 + g_bar_phase[i]);
+                double s2 = sin(t * 3.0 + i * 0.3);
+                h_norm = 0.15 + 0.25*(0.5+0.5*s1) + 0.10*(0.5+0.5*s2);
+            }
+            h_norm *= (0.6 + 0.4 * pulse);
+            int h = (int)(h_norm * max_h);
+            if (h < 2) h = 2;
+
+            COLORREF final_col = lerp_color(RGB(8,8,16), bar_col, 0.5 + 0.5 * pulse);
+            int bx = bars_x0 + i * (bar_w + bar_gap);
+
+            // Glow halo behind
+            COLORREF glow = lerp_color(RGB(8,8,16), final_col, 0.25 * pulse);
+            HBRUSH gbr = CreateSolidBrush(glow);
+            HPEN   gpn = CreatePen(PS_SOLID, 0, glow);
+            SelectObject(mdc, gbr); SelectObject(mdc, gpn);
+            RoundRect(mdc, bx-1, cy-(h+3), bx+bar_w+1, cy+(h+3), bar_w+2, bar_w+2);
+            DeleteObject(gbr); DeleteObject(gpn);
+
+            // Bar itself
+            HBRUSH br = CreateSolidBrush(final_col);
+            HPEN   pn = CreatePen(PS_SOLID, 0, final_col);
+            SelectObject(mdc, br); SelectObject(mdc, pn);
+            RoundRect(mdc, bx, cy-h, bx+bar_w, cy+h, bar_w, bar_w);
+            DeleteObject(br); DeleteObject(pn);
+        }
+
+        // Left: glowing dot with halo rings
+        {
+            COLORREF dot_col = is_rec ? RGB(255, 60, 60) : RGB(70, 140, 255);
+            int dot_cx = 20, dot_cy = cy;
+            for (int ring = 3; ring >= 1; ring--) {
+                int r = 5 + ring * 3;
+                COLORREF gc = lerp_color(RGB(8,8,16), dot_col, 0.12 * ring * pulse);
+                HBRUSH rb = CreateSolidBrush(gc);
+                HPEN   rp = CreatePen(PS_SOLID, 0, gc);
+                SelectObject(mdc, rb); SelectObject(mdc, rp);
+                Ellipse(mdc, dot_cx-r, dot_cy-r, dot_cx+r, dot_cy+r);
+                DeleteObject(rb); DeleteObject(rp);
+            }
+            COLORREF core = lerp_color(dot_col, RGB(255,255,255), 0.3 * pulse);
+            HBRUSH db = CreateSolidBrush(core);
+            HPEN   dp = CreatePen(PS_SOLID, 0, core);
+            SelectObject(mdc, db); SelectObject(mdc, dp);
+            Ellipse(mdc, dot_cx-5, dot_cy-5, dot_cx+5, dot_cy+5);
+            DeleteObject(db); DeleteObject(dp);
+        }
+
+        // Right: state text + hotkey hint
+        {
+            const wchar_t* label = is_rec ? L"聆听中" : L"识别中";
+            SelectObject(mdc, g_font_wave);
+            COLORREF txt_col = is_rec
+                ? lerp_color(RGB(255,80,80), RGB(255,200,180), pulse)
+                : lerp_color(RGB(80,140,255), RGB(180,200,255), pulse);
+            SetTextColor(mdc, txt_col);
+            RECT rT = { W - 90, 4, W - 10, H/2 + 6 };
+            DrawText(mdc, label, -1, &rT, DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+
+            std::wstring hk;
+            { std::string s = hotkey_to_string(g_hotkey_stop); hk = std::wstring(s.begin(), s.end()); }
+            std::wstring hint = L"按 " + hk + L" 停止";
+            SelectObject(mdc, g_font_wave_sm);
+            SetTextColor(mdc, RGB(80, 80, 100));
+            RECT rH = { W - 110, H/2 + 2, W - 6, H - 2 };
+            DrawText(mdc, hint.c_str(), -1, &rH, DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+        }
+
+        BitBlt(dc, 0, 0, W, H, mdc, 0, 0, SRCCOPY);
         SelectObject(mdc, old_bmp);
         DeleteObject(bmp); DeleteDC(mdc);
         EndPaint(hwnd, &ps);
         return 0;
     }
 
-    // ── Mouse: drag + click logic ─────────────────────────────────────────
-    case WM_LBUTTONDOWN: {
-        SetCapture(hwnd);
-        GetCursorPos(&g_st_drag_orig);
-        RECT wr; GetWindowRect(hwnd, &wr);
-        g_st_wnd_orig = { wr.left, wr.top };
-        g_st_dragging = false;
-        return 0;
-    }
-    case WM_MOUSEMOVE: {
-        if (GetCapture() != hwnd) return 0;
-        POINT cur; GetCursorPos(&cur);
-        int dx = cur.x - g_st_drag_orig.x;
-        int dy = cur.y - g_st_drag_orig.y;
-        if (!g_st_dragging && (abs(dx) > 4 || abs(dy) > 4))
-            g_st_dragging = true;
-        if (g_st_dragging)
-            SetWindowPos(hwnd, NULL,
-                g_st_wnd_orig.x + dx, g_st_wnd_orig.y + dy,
-                0, 0, SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
-        return 0;
-    }
-    case WM_LBUTTONUP: {
-        if (GetCapture() != hwnd) return 0;
-        ReleaseCapture();
-        if (!g_st_dragging) {
-            POINT pt = { LOWORD(lp), HIWORD(lp) };
-            if (PtInRect(&g_gear_rect, pt)) {
-                // Open config dialog
-                PostMessage(G.overlay, WM_APP + 7, 0, 0);
-            } else {
-                // Toggle auto-enter
-                g_auto_enter = !g_auto_enter;
-                log_info(std::string("Auto-enter: ") + (g_auto_enter ? "ON" : "OFF"));
-                InvalidateRect(hwnd, NULL, TRUE);
-            }
-        }
-        g_st_dragging = false;
-        return 0;
-    }
-
     case WM_DESTROY:
-        if (g_font_status)     { DeleteObject(g_font_status);     g_font_status     = NULL; }
-        if (g_font_status_sub) { DeleteObject(g_font_status_sub); g_font_status_sub = NULL; }
+        if (g_font_wave)    { DeleteObject(g_font_wave);    g_font_wave    = NULL; }
+        if (g_font_wave_sm) { DeleteObject(g_font_wave_sm); g_font_wave_sm = NULL; }
         return 0;
     }
     return DefWindowProc(hwnd, msg, wp, lp);
 }
 
-static void status_refresh() {
-    if (G.status_wnd) InvalidateRect(G.status_wnd, NULL, TRUE);
+static void wave_show() {
+    if (!G.wave_wnd) return;
+    g_wave_tick = 0;
+    wave_init_phases();
+    InvalidateRect(G.wave_wnd, NULL, TRUE);
+    ShowWindow(G.wave_wnd, SW_SHOWNA);
+    SetWindowPos(G.wave_wnd, HWND_TOPMOST, 0,0,0,0,
+        SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+    // ~30fps animation
+    g_wave_timer_id = SetTimer(G.wave_wnd, 1, 33, NULL);
+}
+
+static void wave_hide() {
+    if (!G.wave_wnd) return;
+    if (g_wave_timer_id) { KillTimer(G.wave_wnd, 1); g_wave_timer_id = 0; }
+    ShowWindow(G.wave_wnd, SW_HIDE);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1036,6 +1039,9 @@ static LRESULT CALLBACK HotkeyEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
     }
     return CallWindowProc(orig, hwnd, msg, wp, lp);
 }
+
+// Forward declarations for functions defined after this section
+static void tray_update_icon();
 
 // ════════════════════════════════════════════════════════════════════════════
 // Config dialog window
@@ -1157,8 +1163,7 @@ static LRESULT CALLBACK ConfigProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             delete G.asr;
             G.asr = new AsrClient(G.config);
             log_info("Config updated and applied live");
-            // Refresh status window to show new hotkey hint
-            if (G.status_wnd) InvalidateRect(G.status_wnd, NULL, TRUE);
+            tray_update_icon();  // refresh tooltip with new hotkey
             MessageBoxW(hwnd, L"配置已保存，立即生效。", L"VoiceInput", MB_ICONINFORMATION|MB_OK);
             G.config_wnd = NULL;
             DestroyWindow(hwnd);
@@ -1193,16 +1198,115 @@ static void open_config_dialog(HINSTANCE hInst) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// System tray icon
+// System tray icon — dynamic color per state, full context menu
 // ════════════════════════════════════════════════════════════════════════════
+static HICON g_tray_icons[3] = {}; // IDLE, RECORDING, TRANSCRIBING
+
+// Create a simple 16×16 filled-circle icon with the given color
+static HICON create_dot_icon(COLORREF col) {
+    const int SZ = 16;
+    HDC sdc = GetDC(NULL);
+    HDC mdc = CreateCompatibleDC(sdc);
+    HBITMAP color_bmp = CreateCompatibleBitmap(sdc, SZ, SZ);
+    SelectObject(mdc, color_bmp);
+
+    // Fill background with black (transparent via mask)
+    RECT rc = {0,0,SZ,SZ};
+    HBRUSH black = CreateSolidBrush(RGB(0,0,0));
+    FillRect(mdc, &rc, black);
+    DeleteObject(black);
+
+    // Draw filled circle
+    HBRUSH br = CreateSolidBrush(col);
+    HPEN   pn = CreatePen(PS_SOLID, 0, col);
+    SelectObject(mdc, br); SelectObject(mdc, pn);
+    Ellipse(mdc, 2, 2, SZ-2, SZ-2);
+    DeleteObject(br); DeleteObject(pn);
+
+    // Mask: black = opaque, white = transparent
+    HDC mdc2 = CreateCompatibleDC(sdc);
+    HBITMAP mask_bmp = CreateBitmap(SZ, SZ, 1, 1, NULL);
+    SelectObject(mdc2, mask_bmp);
+    HBRUSH white = CreateSolidBrush(RGB(255,255,255));
+    FillRect(mdc2, &rc, white);
+    DeleteObject(white);
+    HBRUSH bk = CreateSolidBrush(RGB(0,0,0));
+    HPEN   pk = CreatePen(PS_SOLID, 0, RGB(0,0,0));
+    SelectObject(mdc2, bk); SelectObject(mdc2, pk);
+    Ellipse(mdc2, 2, 2, SZ-2, SZ-2);
+    DeleteObject(bk); DeleteObject(pk);
+
+    DeleteDC(mdc); DeleteDC(mdc2);
+    ReleaseDC(NULL, sdc);
+
+    ICONINFO ii = {};
+    ii.fIcon    = TRUE;
+    ii.hbmMask  = mask_bmp;
+    ii.hbmColor = color_bmp;
+    HICON icon = CreateIconIndirect(&ii);
+    DeleteObject(color_bmp);
+    DeleteObject(mask_bmp);
+    return icon;
+}
+
+static void tray_init_icons() {
+    g_tray_icons[IDLE]         = create_dot_icon(RGB(120, 120, 120));
+    g_tray_icons[RECORDING]    = create_dot_icon(RGB(255, 70,  70));
+    g_tray_icons[TRANSCRIBING] = create_dot_icon(RGB(70,  140, 255));
+}
+
+static void tray_update_icon() {
+    if (!G.tray_added) return;
+    G.nid.hIcon = g_tray_icons[G.state];
+    // Update tooltip with current state
+    const wchar_t* st = L"待机";
+    if (G.state == RECORDING)    st = L"录音中";
+    if (G.state == TRANSCRIBING) st = L"识别中";
+    std::wstring hk;
+    { std::string s = hotkey_to_string(g_hotkey_start); hk = std::wstring(s.begin(), s.end()); }
+    swprintf_s(G.nid.szTip, L"VoiceInput — %s (%s)", st, hk.c_str());
+    Shell_NotifyIcon(NIM_MODIFY, &G.nid);
+}
+
+#define IDM_AUTO_SEND  4001
+#define IDM_SETTINGS   4002
+#define IDM_EXIT       4003
+
+static void tray_show_menu() {
+    HMENU menu = CreatePopupMenu();
+    AppendMenuW(menu, MF_STRING | (g_auto_enter ? MF_CHECKED : 0),
+                IDM_AUTO_SEND, L"自动发送");
+    AppendMenuW(menu, MF_STRING, IDM_SETTINGS, L"设置…");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(menu, MF_STRING, IDM_EXIT, L"退出 VoiceInput");
+    POINT pt; GetCursorPos(&pt);
+    SetForegroundWindow(G.overlay);
+    int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                             pt.x, pt.y, 0, G.overlay, NULL);
+    DestroyMenu(menu);
+    switch (cmd) {
+    case IDM_AUTO_SEND:
+        g_auto_enter = !g_auto_enter;
+        log_info(std::string("Auto-enter: ") + (g_auto_enter ? "ON" : "OFF"));
+        break;
+    case IDM_SETTINGS:
+        PostMessage(G.overlay, WM_APP + 7, 0, 0);
+        break;
+    case IDM_EXIT:
+        log_info("Exit via tray menu");
+        PostMessage(G.overlay, WM_CLOSE, 0, 0);
+        break;
+    }
+}
+
 static void tray_add(HINSTANCE hInst) {
     G.nid.cbSize           = sizeof(G.nid);
     G.nid.hWnd             = G.overlay;
     G.nid.uID              = 1;
     G.nid.uFlags           = NIF_ICON | NIF_TIP | NIF_MESSAGE;
     G.nid.uCallbackMessage = WM_APP_TRAY;
-    G.nid.hIcon            = LoadIcon(NULL, IDI_INFORMATION);
-    wcscpy_s(G.nid.szTip, L"VoiceInput — 点击状态窗口⚙配置快捷键");
+    G.nid.hIcon            = g_tray_icons[IDLE];
+    wcscpy_s(G.nid.szTip, L"VoiceInput — 待机");
     Shell_NotifyIcon(NIM_ADD, &G.nid);
     G.tray_added = true;
     log_info("Tray icon added");
@@ -1225,6 +1329,7 @@ static void tray_remove() {
         G.tray_added = false;
         log_info("Tray icon removed");
     }
+    for (auto& ic : g_tray_icons) { if (ic) { DestroyIcon(ic); ic = NULL; } }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1324,18 +1429,42 @@ static void hook_thread_fn() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Overlay helpers
+// Overlay helpers (overlay kept for message routing, never shown visually)
 // ════════════════════════════════════════════════════════════════════════════
-static void overlay_show(const wchar_t* main, const wchar_t* sub) {
-    G.main_text = main;
-    G.sub_text  = sub;
-    ShowWindow(G.overlay, SW_SHOWNA);
-    SetWindowPos(G.overlay, HWND_TOPMOST, 0,0,0,0,
-        SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+static int       g_ov_tick      = 0;
+static UINT_PTR  g_ov_timer_id  = 0;
+static const COLORREF OV_KEY    = RGB(1, 1, 1);  // color-key = transparent
+
+// Update overlay alpha to create pulsing glow effect
+static void overlay_update_pulse() {
+    if (!G.overlay) return;
+    bool is_rec = (G.state == RECORDING);
+    double t = g_ov_tick * 0.033;
+    // Fast pulse when recording, slow breathe when transcribing
+    double pulse = is_rec
+        ? 0.4 + 0.6 * (0.5 + 0.5 * sin(t * 4.5))
+        : 0.25 + 0.75 * (0.5 + 0.5 * sin(t * 1.6));
+    // Alpha range: glow visible but screen content stays clear
+    int alpha = 30 + (int)(pulse * 90);
+    if (alpha > 180) alpha = 180;
+    SetLayeredWindowAttributes(G.overlay, 0, (BYTE)alpha, LWA_ALPHA);
     InvalidateRect(G.overlay, NULL, TRUE);
 }
 
-static void overlay_hide() { ShowWindow(G.overlay, SW_HIDE); }
+static void overlay_show(const wchar_t*, const wchar_t*) {
+    g_ov_tick = 0;
+    overlay_update_pulse();
+    ShowWindow(G.overlay, SW_SHOWNA);
+    SetWindowPos(G.overlay, HWND_TOPMOST, 0,0,0,0,
+        SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+    if (!g_ov_timer_id)
+        g_ov_timer_id = SetTimer(G.overlay, 2, 33, NULL);
+}
+
+static void overlay_hide() {
+    if (g_ov_timer_id) { KillTimer(G.overlay, 2); g_ov_timer_id = 0; }
+    ShowWindow(G.overlay, SW_HIDE);
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 // Action handlers — all called on the main thread via WndProc
@@ -1357,8 +1486,9 @@ static void on_start_recording() {
     }
     G.state  = RECORDING;
     g_recording = true;
-    overlay_show(L"Listening", L"Press Space to stop");
-    status_refresh();
+    tray_update_icon();
+    wave_show();
+    overlay_show(NULL, NULL);
     log_info("State → RECORDING");
 }
 
@@ -1370,8 +1500,8 @@ static void on_stop_recording() {
     log_info("on_stop_recording");
     g_recording = false;
     G.state = TRANSCRIBING;
-    overlay_show(L"Transcribing", L"Please wait\u2026");
-    status_refresh();
+    tray_update_icon();
+    InvalidateRect(G.wave_wnd, NULL, TRUE);  // refresh wave to show "识别中"
     log_info("State → TRANSCRIBING");
 
     auto pcm = G.recorder.stop();
@@ -1414,9 +1544,10 @@ static void on_stop_recording() {
 static void on_paste(std::wstring* raw) {
     std::unique_ptr<std::wstring> text(raw);
     G.state = IDLE;
-    status_refresh();
-    log_info("on_paste: text_len=" + std::to_string(text->size()) + " State → IDLE");
+    tray_update_icon();
+    wave_hide();
     overlay_hide();
+    log_info("on_paste: text_len=" + std::to_string(text->size()) + " State → IDLE");
 
     // Write to clipboard
     if (OpenClipboard(NULL)) {
@@ -1438,15 +1569,29 @@ static void on_paste(std::wstring* raw) {
 
     // Restore target window then Ctrl+V
     if (G.target && IsWindow(G.target)) {
+        // Attach thread input to ensure SetForegroundWindow succeeds
+        DWORD target_tid = GetWindowThreadProcessId(G.target, NULL);
+        DWORD our_tid    = GetCurrentThreadId();
+        bool attached = false;
+        if (target_tid != our_tid) {
+            attached = AttachThreadInput(our_tid, target_tid, TRUE) != 0;
+        }
         SetForegroundWindow(G.target);
-        Sleep(80);
+        // Wait until target window is actually foreground (up to 500ms)
+        for (int i = 0; i < 10; i++) {
+            Sleep(50);
+            if (GetForegroundWindow() == G.target) break;
+        }
+        if (attached) AttachThreadInput(our_tid, target_tid, FALSE);
+        log_info("Target window restored, fg=" +
+            std::to_string(GetForegroundWindow() == G.target));
     }
     keybd_event(VK_CONTROL, 0, 0, 0);
     keybd_event('V', 0, 0, 0);
     keybd_event('V', 0, KEYEVENTF_KEYUP, 0);
     keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
     if (g_auto_enter) {
-        Sleep(200);
+        Sleep(350);  // give target app time to process paste
         keybd_event(VK_RETURN, 0, 0, 0);
         keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0);
         log_info("Ctrl+V + Enter sent (auto-enter ON)");
@@ -1462,70 +1607,126 @@ static void on_cancel_recording() {
         G.recorder.stop();   // discard audio
     }
     G.state = IDLE;
-    status_refresh();
-    overlay_show(L"已取消", L"");
-    HWND wnd = G.overlay;
-    std::thread([wnd]{ Sleep(800); PostMessage(wnd, WM_APP_HIDE, 0, 0); }).detach();
+    tray_update_icon();
+    wave_hide();
+    overlay_hide();
+    tray_balloon(L"VoiceInput", L"已取消");
 }
 
 static void on_error(std::wstring* raw) {
     std::unique_ptr<std::wstring> msg(raw);
     g_recording = false;
     G.state = IDLE;
-    status_refresh();
+    tray_update_icon();
+    wave_hide();
+    overlay_hide();
     std::string narrow(msg->begin(), msg->end());
     log_error("on_error: " + narrow);
-    overlay_show(L"Error", msg->c_str());
-    HWND wnd = G.overlay;
-    std::thread([wnd]{ Sleep(2600); PostMessage(wnd, WM_APP_HIDE, 0, 0); }).detach();
+    tray_balloon(L"VoiceInput 错误", msg->c_str());
 }
 
 // ════════════════════════════════════════════════════════════════════════════
 // Overlay window procedure
 // ════════════════════════════════════════════════════════════════════════════
-static HFONT g_font_main = NULL, g_font_sub = NULL;
 
 static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE:
-        g_font_main = CreateFont(-64, 0,0,0, FW_BOLD, 0,0,0,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH|FF_SWISS, L"Segoe UI");
-        g_font_sub  = CreateFont(-24, 0,0,0, FW_NORMAL, 0,0,0,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH|FF_SWISS, L"Segoe UI");
         log_info("Overlay window created");
         return 0;
 
-    case WM_ERASEBKGND: {
-        RECT rc; GetClientRect(hwnd, &rc);
-        HBRUSH bg = CreateSolidBrush(RGB(17,17,17));
-        FillRect((HDC)wp, &rc, bg);
-        DeleteObject(bg);
-        return 1;
-    }
+    case WM_ERASEBKGND: return 1;
 
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(hwnd, &ps);
         RECT rc; GetClientRect(hwnd, &rc);
-        SetBkMode(dc, TRANSPARENT);
+        int W = rc.right, H = rc.bottom;
 
-        // Main text — upper 55% of screen, vertically centered in that zone
-        SelectObject(dc, g_font_main);
-        SetTextColor(dc, RGB(245,245,245));
-        RECT r1 = rc; r1.bottom = rc.top + (rc.bottom - rc.top) * 55 / 100;
-        DrawText(dc, G.main_text.c_str(), -1, &r1, DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+        // Memory DC to avoid flicker
+        HDC mdc = CreateCompatibleDC(dc);
+        HBITMAP bmp = CreateCompatibleBitmap(dc, W, H);
+        HBITMAP old_bmp = (HBITMAP)SelectObject(mdc, bmp);
 
-        // Sub text — below
-        SelectObject(dc, g_font_sub);
-        SetTextColor(dc, RGB(201,201,201));
-        RECT r2 = rc; r2.top = rc.top + (rc.bottom - rc.top) * 55 / 100 + 16;
-        DrawText(dc, G.sub_text.c_str(), -1, &r2, DT_CENTER|DT_TOP|DT_SINGLELINE);
+        bool is_rec = (G.state == RECORDING);
+        double t = g_ov_tick * 0.033;
 
+        // Fill entire screen with a very subtle dark tint (NOT the color key)
+        // This gives a barely-there dimming effect
+        HBRUSH tint = CreateSolidBrush(RGB(3, 3, 6));
+        FillRect(mdc, &rc, tint);
+        DeleteObject(tint);
+
+        // === Edge glow: smooth gradient, 60 strips, wider reach ===
+        const int GLOW_W = 200;
+        const int STRIPS = 60;
+
+        // Glow base color + animated color shift
+        COLORREF glow_core, glow_edge;
+        if (is_rec) {
+            double sh = 0.5 + 0.5 * sin(t * 3.0);
+            double sh2 = 0.5 + 0.5 * sin(t * 7.0);
+            glow_core = RGB((int)(255*(0.9+0.1*sh)), (int)(50+40*sh), (int)(20+30*sh2));
+            glow_edge = RGB((int)(120+60*sh2), (int)(15+20*sh), 8);
+        } else {
+            double sh = 0.5 + 0.5 * sin(t * 1.5);
+            glow_core = RGB((int)(30+50*sh), (int)(80+50*sh), (int)(240+15*(1-sh)));
+            glow_edge = RGB((int)(10+20*sh), (int)(20+25*sh), (int)(100+40*(1-sh)));
+        }
+
+        for (int s = 0; s < STRIPS; s++) {
+            double frac = 1.0 - (double)s / STRIPS;
+            // Cubic falloff for smooth, wide glow
+            double intensity = frac * frac * frac;
+            // Blend between edge color (at screen border) and core color (peak)
+            double peak_frac = frac * frac;
+            COLORREF col = lerp_color(
+                lerp_color(RGB(3,3,6), glow_edge, intensity),
+                glow_core,
+                peak_frac * intensity
+            );
+            int strip_w = GLOW_W / STRIPS + 1;
+            int x = s * (GLOW_W / STRIPS);
+
+            HBRUSH br = CreateSolidBrush(col);
+            RECT rl = { x, 0, x + strip_w, H };
+            FillRect(mdc, &rl, br);
+            RECT rr = { W - x - strip_w, 0, W - x, H };
+            FillRect(mdc, &rr, br);
+            DeleteObject(br);
+        }
+
+        // === Top and bottom thin glow lines for extra sci-fi feel ===
+        {
+            COLORREF line_col = is_rec
+                ? lerp_color(RGB(3,3,6), RGB(200, 50, 30), 0.5 + 0.5 * sin(t * 4.0))
+                : lerp_color(RGB(3,3,6), RGB(40, 80, 220), 0.5 + 0.5 * sin(t * 2.0));
+            for (int dy = 0; dy < 4; dy++) {
+                double dim = 1.0 - dy * 0.3;
+                COLORREF c = lerp_color(RGB(3,3,6), line_col, dim * 0.6);
+                HPEN pen = CreatePen(PS_SOLID, 1, c);
+                SelectObject(mdc, pen);
+                // Top line
+                MoveToEx(mdc, 0, dy, NULL); LineTo(mdc, W, dy);
+                // Bottom line
+                MoveToEx(mdc, 0, H - 1 - dy, NULL); LineTo(mdc, W, H - 1 - dy);
+                DeleteObject(pen);
+            }
+        }
+
+        BitBlt(dc, 0, 0, W, H, mdc, 0, 0, SRCCOPY);
+        SelectObject(mdc, old_bmp);
+        DeleteObject(bmp); DeleteDC(mdc);
         EndPaint(hwnd, &ps);
         return 0;
     }
+
+    case WM_TIMER:
+        if (wp == 2) {
+            g_ov_tick++;
+            overlay_update_pulse();
+        }
+        return 0;
 
     // App messages dispatched here on the main thread
     case WM_APP_START:  on_start_recording();        return 0;
@@ -1535,19 +1736,8 @@ static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_ERROR:  on_error((std::wstring*)lp); return 0;
     case WM_APP_HIDE:   overlay_hide();              return 0;
     case WM_APP_TRAY:
-        if (lp == WM_RBUTTONUP) {
-            // Right-click: show context menu with Exit option
-            HMENU menu = CreatePopupMenu();
-            AppendMenuW(menu, MF_STRING, 1, L"退出 VoiceInput");
-            POINT pt; GetCursorPos(&pt);
-            SetForegroundWindow(hwnd);
-            int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
-                                     pt.x, pt.y, 0, hwnd, NULL);
-            DestroyMenu(menu);
-            if (cmd == 1) {
-                log_info("Exit via tray menu");
-                PostMessage(hwnd, WM_CLOSE, 0, 0);
-            }
+        if (lp == WM_RBUTTONUP || lp == WM_LBUTTONUP) {
+            tray_show_menu();
         }
         return 0;
     case WM_APP + 7:   // open config dialog (posted by status window gear click)
@@ -1558,13 +1748,13 @@ static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         log_info("WM_CLOSE received — shutting down");
         if (g_hook_tid) PostThreadMessage(g_hook_tid, WM_QUIT, 0, 0);
         tray_remove();
-        if (G.status_wnd) { DestroyWindow(G.status_wnd); G.status_wnd = NULL; }
+        wave_hide();
+        if (G.wave_wnd) { DestroyWindow(G.wave_wnd); G.wave_wnd = NULL; }
         DestroyWindow(hwnd);
         return 0;
 
     case WM_DESTROY:
-        if (g_font_main) DeleteObject(g_font_main);
-        if (g_font_sub)  DeleteObject(g_font_sub);
+        if (g_ov_timer_id) { KillTimer(hwnd, 2); g_ov_timer_id = 0; }
         log_info("Overlay destroyed, posting WM_QUIT");
         PostQuitMessage(0);
         return 0;
@@ -1619,7 +1809,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
     wc.style         = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc   = OverlayProc;
     wc.hInstance     = hInst;
-    wc.hbrBackground = CreateSolidBrush(RGB(17,17,17));
+    wc.hbrBackground = CreateSolidBrush(RGB(1,1,1));  // color-key = transparent
     wc.lpszClassName = OVERLAY_CLASS;
     if (!RegisterClassEx(&wc)) {
         log_error("RegisterClassEx failed, error=" + std::to_string(GetLastError()));
@@ -1627,14 +1817,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
         log_info("Window class registered");
     }
 
-    // Register status mini-window class
-    WNDCLASSEX wcs = { sizeof(wcs) };
-    wcs.style         = CS_HREDRAW | CS_VREDRAW;
-    wcs.lpfnWndProc   = StatusProc;
-    wcs.hInstance     = hInst;
-    wcs.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    wcs.lpszClassName = STATUS_CLASS;
-    RegisterClassEx(&wcs);
+    // Register wave indicator window class
+    WNDCLASSEX wcw = { sizeof(wcw) };
+    wcw.style         = CS_HREDRAW | CS_VREDRAW;
+    wcw.lpfnWndProc   = WaveProc;
+    wcw.hInstance     = hInst;
+    wcw.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    wcw.lpszClassName = WAVE_CLASS;
+    RegisterClassEx(&wcw);
 
     // Register config dialog class
     WNDCLASSEX wcc = { sizeof(wcc) };
@@ -1645,16 +1835,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
     wcc.lpszClassName = CONFIG_CLASS;
     RegisterClassEx(&wcc);
 
-    // Full virtual-screen coverage (multi-monitor friendly)
-    int sx = GetSystemMetrics(SM_XVIRTUALSCREEN);
-    int sy = GetSystemMetrics(SM_YVIRTUALSCREEN);
-    int sw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-    int sh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-    log_info("Virtual screen: x=" + std::to_string(sx) + " y=" + std::to_string(sy) +
-             " w=" + std::to_string(sw) + " h=" + std::to_string(sh));
+    // Primary monitor only (not virtual screen — avoids bleeding into other monitors)
+    int sx = 0, sy = 0;
+    int sw = GetSystemMetrics(SM_CXSCREEN);
+    int sh = GetSystemMetrics(SM_CYSCREEN);
+    log_info("Primary screen: w=" + std::to_string(sw) + " h=" + std::to_string(sh));
 
     G.overlay = CreateWindowEx(
-        WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+        WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT,
         OVERLAY_CLASS, L"VoiceInput",
         WS_POPUP,
         sx, sy, sw, sh,
@@ -1668,30 +1856,37 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
     }
     log_info("Overlay window handle: " + std::to_string((uintptr_t)G.overlay));
 
-    // 88% opacity, same as original
-    SetLayeredWindowAttributes(G.overlay, 0, (BYTE)(0.88 * 255), LWA_ALPHA);
+    // Start fully transparent; overlay_show sets alpha when recording starts
+    SetLayeredWindowAttributes(G.overlay, 0, 0, LWA_ALPHA);
 
-    // Create status mini-window — top-right corner of primary screen
+    // Create wave indicator window — centered, ~200px above taskbar, hidden initially
     {
         int scr_w = GetSystemMetrics(SM_CXSCREEN);
-        int pos_x = scr_w - STATUS_W - 10;
-        int pos_y = 10;
-        G.status_wnd = CreateWindowEx(
+        int scr_h = GetSystemMetrics(SM_CYSCREEN);
+        RECT tb_rc = {};
+        HWND taskbar = FindWindow(L"Shell_TrayWnd", NULL);
+        int taskbar_h = 40;
+        if (taskbar && GetWindowRect(taskbar, &tb_rc))
+            taskbar_h = tb_rc.bottom - tb_rc.top;
+        int pos_x = (scr_w - WAVE_W) / 2;
+        int pos_y = scr_h - taskbar_h - 250 - WAVE_H;
+        G.wave_wnd = CreateWindowEx(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-            STATUS_CLASS, L"VoiceInput Status",
-            WS_POPUP | WS_VISIBLE,
-            pos_x, pos_y, STATUS_W, STATUS_H,
+            WAVE_CLASS, L"VoiceInput Wave",
+            WS_POPUP,   // not WS_VISIBLE — starts hidden
+            pos_x, pos_y, WAVE_W, WAVE_H,
             NULL, NULL, hInst, NULL
         );
-        log_info("Status window created at (" + std::to_string(pos_x) +
+        log_info("Wave window created at (" + std::to_string(pos_x) +
                  "," + std::to_string(pos_y) + ")");
     }
 
-    // Add tray icon so the user can see the program is running
+    // Create tray icon with state-colored dots
+    tray_init_icons();
     tray_add(hInst);
 
     // Show startup balloon
-    tray_balloon(L"VoiceInput 已就绪", L"点击右上角 ⚙ 可配置快捷键和 API");
+    tray_balloon(L"VoiceInput 已就绪", L"右键托盘图标可配置快捷键和 API");
     log_info("Startup balloon shown");
 
     // Start keyboard hook in its own thread
