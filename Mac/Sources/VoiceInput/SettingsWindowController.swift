@@ -7,6 +7,7 @@ class HotkeyCaptureView: NSTextField {
     
     private var isCapturing = false
     private var originalValue: String = ""
+    private var eventMonitor: Any?
     
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -43,8 +44,8 @@ class HotkeyCaptureView: NSTextField {
         layer?.borderWidth = 2
         layer?.borderColor = NSColor.systemBlue.cgColor
         
-        // Start monitoring global key events
-        NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+        // Start monitoring local key events — store reference so we can remove it
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
             self?.handleKeyEvent(event)
             return nil
         }
@@ -76,14 +77,16 @@ class HotkeyCaptureView: NSTextField {
     
     private func finishCapture(with hotkey: String) {
         isCapturing = false
+        if let m = eventMonitor { NSEvent.removeMonitor(m); eventMonitor = nil }
         stringValue = hotkey
         textColor = NSColor.controlTextColor
         layer?.borderWidth = 0
         onHotkeyCaptured?(hotkey)
     }
-    
+
     private func cancelCapture() {
         isCapturing = false
+        if let m = eventMonitor { NSEvent.removeMonitor(m); eventMonitor = nil }
         stringValue = originalValue
         textColor = NSColor.controlTextColor
         layer?.borderWidth = 0
@@ -102,8 +105,9 @@ class SettingsWindowController: NSWindowController {
     
     var onSave: ((Config) -> Void)?
     var onCancel: (() -> Void)?
-    
+
     private var config: Config
+    private var didSave = false
     
     // Form fields
     private var appIdField: NSTextField!
@@ -276,6 +280,7 @@ class SettingsWindowController: NSWindowController {
         
         do {
             try newConfig.save()
+            didSave = true
             onSave?(newConfig)
             window?.close()
         } catch {
@@ -300,6 +305,6 @@ class SettingsWindowController: NSWindowController {
 // MARK: - NSWindowDelegate
 extension SettingsWindowController: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
-        onCancel?()
+        if !didSave { onCancel?() }
     }
 }

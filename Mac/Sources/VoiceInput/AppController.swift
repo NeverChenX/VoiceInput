@@ -6,7 +6,7 @@ class AppController {
     var state: AppState = .idle { didSet { statusWC.update(state: state) } }
 
     private let recorder   = AudioRecorder()
-    private let asr: AsrClient
+    private var asr: AsrClient
     private let hotkey     = HotkeyManager()
     private let statusWC   = StatusWindowController()
     private var overlayWC: OverlayWindowController?
@@ -61,9 +61,10 @@ class AppController {
             self.config = newConfig
             
             // Update hotkeys
+            self.asr = AsrClient(config: newConfig)
             self.hotkey.configure(startHotkey: newConfig.hotkeyStart, stopHotkey: newConfig.hotkeyStopValue)
             self.hotkey.restart()
-            
+
             // Update status window
             self.statusWC.update(hotkey: newConfig.hotkeyStart)
             self.statusWC.autoEnter = newConfig.autoEnterValue

@@ -71,6 +71,9 @@ class HotkeyManager {
     func stop() {
         if let t = tap { CGEvent.tapEnable(tap: t, enable: false) }
         if let s = src { CFRunLoopRemoveSource(CFRunLoopGetMain(), s, .commonModes) }
+        tap = nil
+        src = nil
+        recording = false
     }
     
     func restart() {
@@ -96,9 +99,9 @@ class HotkeyManager {
                 DispatchQueue.main.async { self.onCancel?() }
                 return nil
             }
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
-        
+
         // While recording: check stop hotkey
         if recording {
             if checkStopHotkey(key: key, down: down, flags: event.flags) {
@@ -126,7 +129,7 @@ class HotkeyManager {
             }
         }
         
-        return Unmanaged.passRetained(event)
+        return Unmanaged.passUnretained(event)
     }
     
     private func checkStartHotkey(key: CGKeyCode, down: Bool, flags: CGEventFlags) -> Bool {

@@ -121,10 +121,21 @@ struct HotkeyConfig {
         case "esc", "escape": keyCode = 53
         case "tab": keyCode = 48
         case "delete", "backspace": keyCode = 51
-        case "a"..."z":
-            keyCode = CGKeyCode(0 + keyPart.unicodeScalars.first!.value - Character("a").unicodeScalars.first!.value)
-        case "0"..."9":
-            keyCode = CGKeyCode(29 + keyPart.unicodeScalars.first!.value - Character("0").unicodeScalars.first!.value)
+        // macOS virtual key codes follow physical keyboard layout, NOT alphabetical order
+        case "a": keyCode = 0;  case "s": keyCode = 1;  case "d": keyCode = 2
+        case "f": keyCode = 3;  case "h": keyCode = 4;  case "g": keyCode = 5
+        case "z": keyCode = 6;  case "x": keyCode = 7;  case "c": keyCode = 8
+        case "v": keyCode = 9;  case "b": keyCode = 11; case "q": keyCode = 12
+        case "w": keyCode = 13; case "e": keyCode = 14; case "r": keyCode = 15
+        case "y": keyCode = 16; case "t": keyCode = 17; case "o": keyCode = 31
+        case "u": keyCode = 32; case "i": keyCode = 34; case "p": keyCode = 35
+        case "l": keyCode = 37; case "j": keyCode = 38; case "k": keyCode = 40
+        case "n": keyCode = 45; case "m": keyCode = 46
+        // Number key codes are also non-sequential
+        case "0": keyCode = 29; case "1": keyCode = 18; case "2": keyCode = 19
+        case "3": keyCode = 20; case "4": keyCode = 21; case "5": keyCode = 23
+        case "6": keyCode = 22; case "7": keyCode = 26; case "8": keyCode = 28
+        case "9": keyCode = 25
         case "f1": keyCode = 122
         case "f2": keyCode = 120
         case "f3": keyCode = 99
@@ -159,8 +170,21 @@ struct HotkeyConfig {
         case 53: keyName = "Esc"
         case 48: keyName = "Tab"
         case 51: keyName = "Delete"
-        case 0...25: keyName = String(Character(UnicodeScalar(65 + keyCode)!))
-        case 29...38: keyName = String(Character(UnicodeScalar(48 + keyCode - 29)!))
+        // Letter key codes (physical layout order)
+        case 0: keyName="A"; case 1: keyName="S"; case 2: keyName="D"
+        case 3: keyName="F"; case 4: keyName="H"; case 5: keyName="G"
+        case 6: keyName="Z"; case 7: keyName="X"; case 8: keyName="C"
+        case 9: keyName="V"; case 11: keyName="B"; case 12: keyName="Q"
+        case 13: keyName="W"; case 14: keyName="E"; case 15: keyName="R"
+        case 16: keyName="Y"; case 17: keyName="T"; case 31: keyName="O"
+        case 32: keyName="U"; case 34: keyName="I"; case 35: keyName="P"
+        case 37: keyName="L"; case 38: keyName="J"; case 40: keyName="K"
+        case 45: keyName="N"; case 46: keyName="M"
+        // Number key codes
+        case 29: keyName="0"; case 18: keyName="1"; case 19: keyName="2"
+        case 20: keyName="3"; case 21: keyName="4"; case 23: keyName="5"
+        case 22: keyName="6"; case 26: keyName="7"; case 28: keyName="8"
+        case 25: keyName="9"
         case 122: keyName = "F1"
         case 120: keyName = "F2"
         case 99: keyName = "F3"
