@@ -74,7 +74,7 @@ static const wchar_t*  OVERLAY_CLASS   = L"VoiceInputOverlay";
 static const wchar_t*  CONFIG_CLASS    = L"VoiceInputConfig";
 static const wchar_t*  WAVE_CLASS      = L"VoiceInputWave";
 static const int       WAVE_W          = 540;
-static const int       WAVE_H          = 32;
+static const int       WAVE_H          = 86;
 
 // Custom window messages
 enum {
@@ -747,10 +747,10 @@ static COLORREF lerp_color(COLORREF a, COLORREF b, double t) {
 static LRESULT CALLBACK WaveProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE:
-        g_font_wave = CreateFont(-20, 0,0,0, FW_SEMIBOLD, 0,0,0,
+        g_font_wave = CreateFont(-28, 0,0,0, FW_BOLD, 0,0,0,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             ANTIALIASED_QUALITY, DEFAULT_PITCH|FF_SWISS, L"Segoe UI");
-        g_font_wave_sm = CreateFont(-13, 0,0,0, FW_NORMAL, 0,0,0,
+        g_font_wave_sm = CreateFont(-15, 0,0,0, FW_NORMAL, 0,0,0,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             ANTIALIASED_QUALITY, DEFAULT_PITCH|FF_SWISS, L"Segoe UI");
         wave_set_round_rgn(hwnd);
@@ -773,47 +773,40 @@ static LRESULT CALLBACK WaveProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         HBITMAP bmp = CreateCompatibleBitmap(dc, W, H);
         HBITMAP old_bmp = (HBITMAP)SelectObject(mdc, bmp);
 
-        // Deep dark background
-        HBRUSH bg = CreateSolidBrush(RGB(8, 8, 16));
+        // Clean dark background
+        HBRUSH bg = CreateSolidBrush(RGB(8, 8, 18));
         FillRect(mdc, &rc, bg);
         DeleteObject(bg);
         SetBkMode(mdc, TRANSPARENT);
 
         bool is_rec = (G.state == RECORDING);
         double t = g_wave_tick * 0.033;
-
-        // Global pulse - whole bar breathes/flashes
         double pulse = is_rec
-            ? 0.7 + 0.3 * sin(t * 4.0)
-            : 0.5 + 0.5 * sin(t * 1.5);
+            ? 0.75 + 0.25 * sin(t * 4.0)
+            : 0.5  + 0.5  * sin(t * 1.5);
 
-        // Bottom glow line
+        // Layout: 48 thin bars for fine-grained look
+        const int bar_count = 48;
+        const int bars_x0   = 10;
+        const int bars_x1   = W - 122;
+        const int bar_step  = (bars_x1 - bars_x0) / bar_count;  // ~8px
+        const int bar_w     = bar_step - 2;                      // ~6px, fine & clean
+        const int cy        = H / 2;
+        const int max_h     = H / 2 - 5;
+
+        // Center line — subtle, anchors the animation
         {
-            COLORREF glow_col = is_rec
-                ? lerp_color(RGB(255, 30, 60), RGB(255, 120, 50), 0.5 + 0.5 * sin(t * 3.0))
-                : lerp_color(RGB(40, 100, 255), RGB(120, 60, 255), 0.5 + 0.5 * sin(t * 1.2));
-            glow_col = lerp_color(RGB(8,8,16), glow_col, pulse);
-            for (int dy = 0; dy < 3; dy++) {
-                HPEN p = CreatePen(PS_SOLID, 1, lerp_color(glow_col, RGB(8,8,16), dy * 0.35));
-                SelectObject(mdc, p);
-                MoveToEx(mdc, 20, H - 4 + dy, NULL);
-                LineTo(mdc, W - 20, H - 4 + dy);
-                DeleteObject(p);
-            }
+            HPEN cl = CreatePen(PS_SOLID, 1, RGB(22, 22, 40));
+            SelectObject(mdc, cl);
+            MoveToEx(mdc, bars_x0, cy, NULL);
+            LineTo(mdc, bars_x1, cy);
+            DeleteObject(cl);
         }
 
-        // Spectrum bars: 32 bars, centered
-        const int bar_count = 32;
-        const int bar_w     = 5;
-        const int bar_gap   = 3;
-        const int total_bw  = bar_count * (bar_w + bar_gap) - bar_gap;
-        const int bars_x0   = (W - total_bw) / 2;
-        const int cy        = H / 2 - 1;
-        const int max_h     = H / 2 - 8;
-
-        COLORREF c_left  = is_rec ? RGB(0, 230, 180) : RGB(60, 120, 255);
-        COLORREF c_mid   = is_rec ? RGB(60, 140, 255) : RGB(100, 80, 255);
-        COLORREF c_right = is_rec ? RGB(180, 60, 255) : RGB(160, 50, 255);
+        // Neon gradient: teal→blue→violet (recording) or blue→indigo (transcribing)
+        COLORREF c_left  = is_rec ? RGB(0, 220, 160) : RGB(30, 120, 255);
+        COLORREF c_mid   = is_rec ? RGB(0, 140, 255) : RGB(80,  60, 255);
+        COLORREF c_right = is_rec ? RGB(180, 0, 255) : RGB(160, 30, 255);
 
         for (int i = 0; i < bar_count; i++) {
             double frac = (double)i / (bar_count - 1);
@@ -826,73 +819,49 @@ static LRESULT CALLBACK WaveProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 double s1 = sin(t * 5.0  + g_bar_phase[i]);
                 double s2 = sin(t * 8.0  + i * 0.4);
                 double s3 = sin(t * 12.0 + i * 0.7 + g_bar_phase[i] * 0.5);
-                h_norm = 0.3 + 0.35*(0.5+0.5*s1) + 0.20*(0.5+0.5*s2) + 0.15*(0.5+0.5*s3);
+                h_norm = 0.05 + 0.55*(0.5+0.5*s1) + 0.25*(0.5+0.5*s2) + 0.15*(0.5+0.5*s3);
             } else {
                 double s1 = sin(t * 1.8 + g_bar_phase[i]);
                 double s2 = sin(t * 3.0 + i * 0.3);
-                h_norm = 0.15 + 0.25*(0.5+0.5*s1) + 0.10*(0.5+0.5*s2);
+                h_norm = 0.05 + 0.50*(0.5+0.5*s1) + 0.25*(0.5+0.5*s2);
             }
-            h_norm *= (0.6 + 0.4 * pulse);
+            h_norm *= (0.85 + 0.15 * pulse);
             int h = (int)(h_norm * max_h);
             if (h < 2) h = 2;
 
-            COLORREF final_col = lerp_color(RGB(8,8,16), bar_col, 0.5 + 0.5 * pulse);
-            int bx = bars_x0 + i * (bar_w + bar_gap);
+            int bx = bars_x0 + i * bar_step;
 
-            // Glow halo behind
-            COLORREF glow = lerp_color(RGB(8,8,16), final_col, 0.25 * pulse);
+            // Subtle glow shadow (one pass, small expansion)
+            COLORREF glow = lerp_color(RGB(8,8,18), bar_col, 0.20);
             HBRUSH gbr = CreateSolidBrush(glow);
             HPEN   gpn = CreatePen(PS_SOLID, 0, glow);
             SelectObject(mdc, gbr); SelectObject(mdc, gpn);
-            RoundRect(mdc, bx-1, cy-(h+3), bx+bar_w+1, cy+(h+3), bar_w+2, bar_w+2);
+            RoundRect(mdc, bx-1, cy-h-2, bx+bar_w+1, cy+h+2, 4, 4);
             DeleteObject(gbr); DeleteObject(gpn);
 
-            // Bar itself
-            HBRUSH br = CreateSolidBrush(final_col);
-            HPEN   pn = CreatePen(PS_SOLID, 0, final_col);
+            // Bar — clean, fully-saturated, rounded ends
+            HBRUSH br = CreateSolidBrush(bar_col);
+            HPEN   pn = CreatePen(PS_SOLID, 0, bar_col);
             SelectObject(mdc, br); SelectObject(mdc, pn);
             RoundRect(mdc, bx, cy-h, bx+bar_w, cy+h, bar_w, bar_w);
             DeleteObject(br); DeleteObject(pn);
         }
 
-        // Left: glowing dot with halo rings
-        {
-            COLORREF dot_col = is_rec ? RGB(255, 60, 60) : RGB(70, 140, 255);
-            int dot_cx = 20, dot_cy = cy;
-            for (int ring = 3; ring >= 1; ring--) {
-                int r = 5 + ring * 3;
-                COLORREF gc = lerp_color(RGB(8,8,16), dot_col, 0.12 * ring * pulse);
-                HBRUSH rb = CreateSolidBrush(gc);
-                HPEN   rp = CreatePen(PS_SOLID, 0, gc);
-                SelectObject(mdc, rb); SelectObject(mdc, rp);
-                Ellipse(mdc, dot_cx-r, dot_cy-r, dot_cx+r, dot_cy+r);
-                DeleteObject(rb); DeleteObject(rp);
-            }
-            COLORREF core = lerp_color(dot_col, RGB(255,255,255), 0.3 * pulse);
-            HBRUSH db = CreateSolidBrush(core);
-            HPEN   dp = CreatePen(PS_SOLID, 0, core);
-            SelectObject(mdc, db); SelectObject(mdc, dp);
-            Ellipse(mdc, dot_cx-5, dot_cy-5, dot_cx+5, dot_cy+5);
-            DeleteObject(db); DeleteObject(dp);
-        }
-
-        // Right: state text + hotkey hint
+        // Right: state label + stop hint
         {
             const wchar_t* label = is_rec ? L"聆听中" : L"识别中";
             SelectObject(mdc, g_font_wave);
-            COLORREF txt_col = is_rec
-                ? lerp_color(RGB(255,80,80), RGB(255,200,180), pulse)
-                : lerp_color(RGB(80,140,255), RGB(180,200,255), pulse);
+            COLORREF txt_col = is_rec ? RGB(255, 65, 65) : RGB(50, 150, 255);
             SetTextColor(mdc, txt_col);
-            RECT rT = { W - 90, 4, W - 10, H/2 + 6 };
+            RECT rT = { W - 118, 2, W - 4, H/2 + 4 };
             DrawText(mdc, label, -1, &rT, DT_CENTER|DT_VCENTER|DT_SINGLELINE);
 
             std::wstring hk;
             { std::string s = hotkey_to_string(g_hotkey_stop); hk = std::wstring(s.begin(), s.end()); }
             std::wstring hint = L"按 " + hk + L" 停止";
             SelectObject(mdc, g_font_wave_sm);
-            SetTextColor(mdc, RGB(80, 80, 100));
-            RECT rH = { W - 110, H/2 + 2, W - 6, H - 2 };
+            SetTextColor(mdc, RGB(90, 90, 120));
+            RECT rH = { W - 118, H/2 + 2, W - 4, H - 2 };
             DrawText(mdc, hint.c_str(), -1, &rH, DT_CENTER|DT_VCENTER|DT_SINGLELINE);
         }
 
@@ -1869,7 +1838,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
         if (taskbar && GetWindowRect(taskbar, &tb_rc))
             taskbar_h = tb_rc.bottom - tb_rc.top;
         int pos_x = (scr_w - WAVE_W) / 2;
-        int pos_y = scr_h - taskbar_h - 250 - WAVE_H;
+        int pos_y = scr_h - taskbar_h - 350 - WAVE_H;
         G.wave_wnd = CreateWindowEx(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             WAVE_CLASS, L"VoiceInput Wave",
