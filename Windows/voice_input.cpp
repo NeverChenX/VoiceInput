@@ -607,12 +607,15 @@ class AudioRecorder {
     static const int N_BUF = 4, BUF_SZ = 4096; // samples per buffer
     HWAVEIN               hwi_  = NULL;
     std::atomic<bool>     alive_{false};
+    std::atomic<float>    level_{0};   // current RMS level 0.0-1.0
     std::mutex            mu_;
     std::vector<int16_t>  data_;
     int16_t               raw_[N_BUF][BUF_SZ];
     WAVEHDR               hdr_[N_BUF];
 
 public:
+    float get_level() const { return level_.load(std::memory_order_relaxed); }
+
     void start() {
         WAVEFORMATEX wfx = {};
         wfx.wFormatTag      = WAVE_FORMAT_PCM;
@@ -650,6 +653,7 @@ public:
 
     std::vector<int16_t> stop() {
         alive_ = false;
+        level_ = 0;
         if (hwi_) {
             log_info("AudioRecorder: stopping");
             waveInStop(hwi_);
@@ -673,9 +677,18 @@ private:
         if (!self->alive_) return;
         auto* h = (WAVEHDR*)p1;
         int n = h->dwBytesRecorded / 2;
+        auto* d = (int16_t*)h->lpData;
+        // Compute RMS level for wave indicator
+        if (n > 0) {
+            double sum = 0;
+            for (int i = 0; i < n; i++) sum += (double)d[i] * d[i];
+            float rms = (float)(sqrt(sum / n) / 32768.0);
+            // Clamp to 0-1, apply gentle curve for better visual response
+            if (rms > 1.0f) rms = 1.0f;
+            self->level_.store(rms, std::memory_order_relaxed);
+        }
         {
             std::lock_guard<std::mutex> lk(self->mu_);
-            auto* d = (int16_t*)h->lpData;
             self->data_.insert(self->data_.end(), d, d + n);
         }
         h->dwBytesRecorded = 0;
@@ -781,6 +794,23 @@ static LRESULT CALLBACK WaveProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         bool is_rec = (G.state == RECORDING);
         double t = g_wave_tick * 0.033;
+
+        // Smooth audio level for responsive but non-jittery animation
+        static double g_smooth_level = 0;
+        if (is_rec) {
+            double raw = (double)G.recorder.get_level();
+            // Amplify: typical speech RMS is ~0.02-0.15, boost to fill visual range
+            double target = raw * 6.0;
+            if (target > 1.0) target = 1.0;
+            // Pow curve: make quiet sounds more visible
+            target = pow(target, 0.6);
+            // Fast attack, slower decay for punchy feel
+            double alpha = (target > g_smooth_level) ? 0.45 : 0.15;
+            g_smooth_level += (target - g_smooth_level) * alpha;
+        } else {
+            g_smooth_level *= 0.8;  // decay when not recording
+        }
+
         double pulse = is_rec
             ? 0.75 + 0.25 * sin(t * 4.0)
             : 0.5  + 0.5  * sin(t * 1.5);
@@ -816,10 +846,17 @@ static LRESULT CALLBACK WaveProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
             double h_norm;
             if (is_rec) {
-                double s1 = sin(t * 5.0  + g_bar_phase[i]);
-                double s2 = sin(t * 8.0  + i * 0.4);
-                double s3 = sin(t * 12.0 + i * 0.7 + g_bar_phase[i] * 0.5);
-                h_norm = 0.05 + 0.55*(0.5+0.5*s1) + 0.25*(0.5+0.5*s2) + 0.15*(0.5+0.5*s3);
+                // Multi-layer sine pattern for organic, non-uniform bar movement
+                double s1 = sin(t * 6.0  + g_bar_phase[i]);
+                double s2 = sin(t * 10.0 + i * 0.5);
+                double s3 = sin(t * 15.0 + i * 0.8 + g_bar_phase[i] * 0.6);
+                double pattern = 0.45*(0.5+0.5*s1) + 0.30*(0.5+0.5*s2) + 0.25*(0.5+0.5*s3);
+                // Add per-bar random variation so bars differ more from each other
+                double bar_var = 0.7 + 0.3 * (0.5 + 0.5 * sin(g_bar_phase[i] * 3.0 + t * 2.0));
+                pattern *= bar_var;
+                // Scale by audio level: silent → flat, speaking → big dynamic bars
+                h_norm = 0.02 + g_smooth_level * 1.1 * pattern;
+                if (h_norm > 1.0) h_norm = 1.0;
             } else {
                 double s1 = sin(t * 1.8 + g_bar_phase[i]);
                 double s2 = sin(t * 3.0 + i * 0.3);
@@ -1456,8 +1493,8 @@ static void on_start_recording() {
     G.state  = RECORDING;
     g_recording = true;
     tray_update_icon();
-    wave_show();
     overlay_show(NULL, NULL);
+    wave_show();
     log_info("State → RECORDING");
 }
 
@@ -1555,14 +1592,27 @@ static void on_paste(std::wstring* raw) {
         log_info("Target window restored, fg=" +
             std::to_string(GetForegroundWindow() == G.target));
     }
-    keybd_event(VK_CONTROL, 0, 0, 0);
-    keybd_event('V', 0, 0, 0);
-    keybd_event('V', 0, KEYEVENTF_KEYUP, 0);
-    keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
+    Sleep(80);  // let target window fully activate before sending keys
+
+    // Use SendInput instead of keybd_event for reliable key delivery
+    auto send_key = [](WORD vk, bool up) {
+        INPUT inp = {};
+        inp.type = INPUT_KEYBOARD;
+        inp.ki.wVk = vk;
+        inp.ki.wScan = (WORD)MapVirtualKey(vk, MAPVK_VK_TO_VSC);
+        inp.ki.dwFlags = (up ? KEYEVENTF_KEYUP : 0) | KEYEVENTF_SCANCODE;
+        SendInput(1, &inp, sizeof(INPUT));
+    };
+    send_key(VK_CONTROL, false);
+    send_key('V', false);
+    Sleep(30);
+    send_key('V', true);
+    send_key(VK_CONTROL, true);
     if (g_auto_enter) {
         Sleep(350);  // give target app time to process paste
-        keybd_event(VK_RETURN, 0, 0, 0);
-        keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0);
+        send_key(VK_RETURN, false);
+        Sleep(30);
+        send_key(VK_RETURN, true);
         log_info("Ctrl+V + Enter sent (auto-enter ON)");
     } else {
         log_info("Ctrl+V sent (auto-enter OFF)");
@@ -1737,6 +1787,18 @@ static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
     // DPI awareness — prevents blurry fonts on high-DPI displays
     SetProcessDPIAware();
+
+    // Pin cwd to exe directory so relative paths (config.json, *.log) resolve
+    // correctly when launched from HKCU\...\Run (which sets cwd to System32).
+    {
+        char exe_path[MAX_PATH] = {};
+        if (GetModuleFileNameA(NULL, exe_path, MAX_PATH) > 0) {
+            if (char* slash = strrchr(exe_path, '\\')) {
+                *slash = '\0';
+                SetCurrentDirectoryA(exe_path);
+            }
+        }
+    }
 
     // Write a separator so multiple runs are easy to distinguish in the log
     log_info("════════════════════════════════════════");

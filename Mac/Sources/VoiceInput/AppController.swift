@@ -11,6 +11,7 @@ class AppController {
     private let statusWC   = StatusWindowController()
     private var overlayWC: OverlayWindowController?
     private var settingsWC: SettingsWindowController?
+    private var levelTimer: Timer?
 
     init(config: Config) {
         self.config = config
@@ -92,12 +93,29 @@ class AppController {
         }
         state = .recording
         showOverlay("正在聆听", hint: "按 \(stopKey) 停止")
+        statusWC.statusView.startWaveAnimation()
+        startLevelPolling()
         logInfo("State → RECORDING")
+    }
+
+    private func startLevelPolling() {
+        levelTimer?.invalidate()
+        levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.statusWC.statusView.audioLevel = self.recorder.level
+        }
+    }
+
+    private func stopLevelPolling() {
+        levelTimer?.invalidate()
+        levelTimer = nil
+        statusWC.statusView.audioLevel = 0
     }
 
     private func stopRecording() {
         guard state == .recording else { return }
         state = .transcribing
+        stopLevelPolling()
         showOverlay("识别中", hint: "请稍候…")
         logInfo("State → TRANSCRIBING")
 
@@ -129,6 +147,8 @@ class AppController {
 
     private func cancelRecording() {
         _ = recorder.stop()
+        stopLevelPolling()
+        statusWC.statusView.stopWaveAnimation()
         state = .idle
         showOverlay("已取消", hint: "")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.hideOverlay() }
@@ -138,6 +158,7 @@ class AppController {
     // ── Paste ──────────────────────────────────────────────────────────────
     private func pasteText(_ text: String) {
         state = .idle
+        statusWC.statusView.stopWaveAnimation()
         hideOverlay()
 
         NSPasteboard.general.clearContents()
@@ -175,6 +196,8 @@ class AppController {
 
     private func showError(_ msg: String) {
         state = .idle
+        stopLevelPolling()
+        statusWC.statusView.stopWaveAnimation()
         showOverlay("错误", hint: msg)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { self.hideOverlay() }
     }

@@ -1,7 +1,7 @@
 {
-  "app_id": "1380983374",
-  "access_token": "WoG6IZCkz0QCyoiBWKwOtuIMSnfmGk40",
-  "secret_key": "jhECtn1EMVy4-myE9rhWiqDORTKtrNxe",
+  "app_id": "YOUR_APP_ID",
+  "access_token": "YOUR_ACCESS_TOKEN",
+  "secret_key": "YOUR_SECRET_KEY",
   "standard_resource_id": "volc.seedasr.auc",
   "standard_submit_endpoint": "https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit",
   "standard_query_endpoint": "https://openspeech.bytedance.com/api/v3/auc/bigmodel/query",

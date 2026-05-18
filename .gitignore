@@ -1,0 +1,16 @@
+# Credentials — keep config.json local only; commit *.example.json instead
+Windows/config.json
+Mac/VoiceInput.app/Contents/MacOS/config.json
+Mac/config.json
+
+# Logs
+*.log
+
+# Build artifacts (Mac)
+Mac/.build/
+Mac/build/
+Mac/DerivedData/
+
+# OS junk
+.DS_Store
+Thumbs.db
